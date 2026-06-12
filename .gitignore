@@ -1,0 +1,38 @@
+# Gradle / Android
+.gradle/
+build/
+**/build/
+local.properties
+captures/
+.externalNativeBuild/
+.cxx/
+
+# Android Studio / IntelliJ
+.idea/
+*.iml
+*.ipr
+*.iws
+
+# APK / bundles generated locally
+*.apk
+*.aab
+*.ap_
+
+# OS / logs
+.DS_Store
+Thumbs.db
+*.log
+
+# Node / web-preview leftovers
+node_modules/
+dist/
+coverage/
+.env*
+!.env.example
+
+# Kotlin/Java
+*.class
+
+# Temporary
+*.tmp
+*.bak

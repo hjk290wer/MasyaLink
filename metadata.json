@@ -1,0 +1,6 @@
+{
+  "name": "MasyaLink",
+  "description": "A private 1-to-1 text messenger using a Supabase backend.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
