@@ -85,7 +85,6 @@ import com.shiroyama.messenger.ui.components.AvatarView
 import com.shiroyama.messenger.ui.components.ChatBackground
 import com.shiroyama.messenger.ui.components.ChatInputBar
 import com.shiroyama.messenger.ui.components.DateSeparator
-import com.shiroyama.messenger.ui.components.MessageActionMenuKt
 import com.shiroyama.messenger.ui.components.MessageBubble
 import com.shiroyama.messenger.ui.components.MessageSelectionOverlay
 import com.shiroyama.messenger.ui.components.StatusDot
@@ -422,15 +421,9 @@ fun ChatScreen(
                 Column(modifier = Modifier.fillMaxSize()) {
                     ConnectionStatusBanner(connectionState)
                     if (messages.isEmpty()) {
-                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            EmptyChatState()
-                        }
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) { EmptyChatState() }
                     } else {
-                        LazyColumn(
-                            state = listState,
-                            modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
-                            verticalArrangement = Arrangement.Top
-                        ) {
+                        LazyColumn(state = listState, modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp), verticalArrangement = Arrangement.Top) {
                             item { Spacer(modifier = Modifier.height(SpacingTokens.Small)) }
                             itemsIndexed(messages, key = { _, item -> item.id }) { index, msg ->
                                 val currentDate = dateLabel(msg.createdAt)
@@ -443,13 +436,9 @@ fun ChatScreen(
                                     onAttachmentClick = { message ->
                                         loadMedia(message) { state ->
                                             val ready = state as? MediaLoadState.Ready
-                                            if (ready != null && message.type in setOf("image", "video", "video_note", "voice")) {
-                                                viewerState = ViewerState(message, ready)
-                                            } else if (ready != null) {
-                                                openDownloadedAttachment(context, ready)
-                                            } else {
-                                                showToast((state as? MediaLoadState.Error)?.message ?: "Media unavailable")
-                                            }
+                                            if (ready != null && message.type in setOf("image", "video", "video_note", "voice")) viewerState = ViewerState(message, ready)
+                                            else if (ready != null) openDownloadedAttachment(context, ready)
+                                            else showToast((state as? MediaLoadState.Error)?.message ?: "Media unavailable")
                                         }
                                     },
                                     onOpenMedia = { message, state -> openMedia(message, state) },
@@ -487,17 +476,8 @@ fun ChatScreen(
 
 @Composable
 private fun ChatTopBar(peerName: String, avatarBytes: ByteArray?, peerOnline: Boolean, isTyping: Boolean, onSettings: () -> Unit) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(),
-        color = ColorTokens.Surface.copy(alpha = if (ColorTokens.IsDark) 0.96f else 0.92f),
-        shadowElevation = if (ColorTokens.IsDark) 0.dp else 8.dp
-    ) {
-        Row(
-            modifier = Modifier
-                .statusBarsPadding()
-                .padding(horizontal = 14.dp, vertical = 10.dp),
-            verticalAlignment = Alignment.CenterVertically
-        ) {
+    Surface(modifier = Modifier.fillMaxWidth(), color = ColorTokens.Surface.copy(alpha = if (ColorTokens.IsDark) 0.96f else 0.92f), shadowElevation = if (ColorTokens.IsDark) 0.dp else 8.dp) {
+        Row(modifier = Modifier.statusBarsPadding().padding(horizontal = 14.dp, vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             AvatarView(peerName, avatarBytes, size = 44.dp)
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f).widthIn(max = 240.dp)) {
@@ -530,12 +510,7 @@ private fun TypingBubble() {
 
 @Composable
 private fun EmptyChatState(modifier: Modifier = Modifier) {
-    Card(
-        modifier = modifier.padding(24.dp),
-        colors = CardDefaults.cardColors(containerColor = ColorTokens.Surface.copy(alpha = 0.9f)),
-        shape = ShapeTokens.Card,
-        border = BorderStroke(1.dp, ColorTokens.BorderLight)
-    ) {
+    Card(modifier = modifier.padding(24.dp), colors = CardDefaults.cardColors(containerColor = ColorTokens.Surface.copy(alpha = 0.9f)), shape = ShapeTokens.Card, border = BorderStroke(1.dp, ColorTokens.BorderLight)) {
         Column(modifier = Modifier.padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
             Text("Пока пусто", style = TypographyTokens.TitleMedium, color = ColorTokens.TextPrimary)
             Spacer(Modifier.height(6.dp))
@@ -545,13 +520,7 @@ private fun EmptyChatState(modifier: Modifier = Modifier) {
 }
 
 @Composable
-private fun AttachmentSheet(
-    onPickPhoto: () -> Unit,
-    onPickVideo: () -> Unit,
-    onPickFile: () -> Unit,
-    onRecordVideoNote: () -> Unit,
-    onCancel: () -> Unit
-) {
+private fun AttachmentSheet(onPickPhoto: () -> Unit, onPickVideo: () -> Unit, onPickFile: () -> Unit, onRecordVideoNote: () -> Unit, onCancel: () -> Unit) {
     Column(modifier = Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(horizontal = 18.dp, vertical = 10.dp)) {
         Text("Attachment", style = TypographyTokens.TitleMedium, color = ColorTokens.TextPrimary, modifier = Modifier.padding(horizontal = 6.dp, vertical = 10.dp))
         AttachmentOption(Icons.Default.Photo, "Photo", "Send an inline image", onPickPhoto)
@@ -566,13 +535,8 @@ private fun AttachmentSheet(
 
 @Composable
 private fun AttachmentOption(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
-    Row(
-        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 6.dp, vertical = 12.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Surface(shape = CircleShape, color = ColorTokens.AccentSoft) {
-            Icon(icon, contentDescription = null, tint = ColorTokens.Primary, modifier = Modifier.padding(11.dp).size(23.dp))
-        }
+    Row(modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 6.dp, vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+        Surface(shape = CircleShape, color = ColorTokens.AccentSoft) { Icon(icon, contentDescription = null, tint = ColorTokens.Primary, modifier = Modifier.padding(11.dp).size(23.dp)) }
         Spacer(Modifier.width(14.dp))
         Column(modifier = Modifier.weight(1f)) {
             Text(title, style = TypographyTokens.BodyLarge, color = ColorTokens.TextPrimary)
@@ -593,15 +557,13 @@ private fun readPickedAttachment(context: Context, uri: Uri): PickedAttachment? 
     return PickedAttachment(fileName = name, mimeType = mime, bytes = bytes)
 }
 
-private fun extractVideoDurationMs(file: File): Int? {
-    return runCatching {
-        val retriever = MediaMetadataRetriever()
-        retriever.setDataSource(file.absolutePath)
-        val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toIntOrNull()
-        retriever.release()
-        duration
-    }.getOrNull()
-}
+private fun extractVideoDurationMs(file: File): Int? = runCatching {
+    val retriever = MediaMetadataRetriever()
+    retriever.setDataSource(file.absolutePath)
+    val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toIntOrNull()
+    retriever.release()
+    duration
+}.getOrNull()
 
 private fun openDownloadedAttachment(context: Context, ready: MediaLoadState.Ready) {
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", ready.file)
