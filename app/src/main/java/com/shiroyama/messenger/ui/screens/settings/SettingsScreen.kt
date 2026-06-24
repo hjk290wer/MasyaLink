@@ -8,10 +8,11 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -28,7 +29,6 @@ import androidx.compose.material.icons.filled.DeleteSweep
 import androidx.compose.material.icons.filled.Edit
 import androidx.compose.material.icons.filled.Image
 import androidx.compose.material.icons.filled.Logout
-import androidx.compose.material.icons.filled.Palette
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -172,7 +172,7 @@ fun SettingsScreen(
             }
 
             SettingsSection(title = "Appearance") {
-                ChatStylePresets.All.forEach { preset ->
+                ChatStylePresets.All.forEach { preset: ChatStylePreset ->
                     ThemePresetRow(
                         preset = preset,
                         selected = selectedStyleId == preset.id,
@@ -215,7 +215,7 @@ private fun SettingsTopBar(onBack: () -> Unit) {
 }
 
 @Composable
-private fun SettingsSection(title: String, content: @Composable Column.() -> Unit) {
+private fun SettingsSection(title: String, content: @Composable ColumnScope.() -> Unit) {
     Card(
         modifier = Modifier.fillMaxWidth(),
         colors = CardDefaults.cardColors(containerColor = ColorTokens.SurfaceElevated.copy(alpha = 0.96f)),
@@ -243,7 +243,7 @@ private fun ThemePresetRow(preset: ChatStylePreset, selected: Boolean, onClick: 
             .padding(12.dp),
         verticalAlignment = Alignment.CenterVertically
     ) {
-        Box(
+        androidx.compose.foundation.layout.Box(
             modifier = Modifier
                 .size(34.dp)
                 .background(Brush.linearGradient(listOf(preset.primaryLight, preset.primary, preset.primaryDark)), CircleShape)
