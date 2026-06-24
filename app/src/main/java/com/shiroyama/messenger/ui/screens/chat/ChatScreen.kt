@@ -4,7 +4,6 @@ import android.Manifest
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
-import android.graphics.BitmapFactory
 import android.media.MediaMetadataRetriever
 import android.media.MediaRecorder
 import android.net.Uri
@@ -13,30 +12,66 @@ import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.foundation.Image
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.imePadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.AttachFile
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.Delete
 import androidx.compose.material.icons.filled.InsertDriveFile
-import androidx.compose.material.icons.filled.Image
+import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.Divider
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.Scaffold
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
@@ -46,6 +81,7 @@ import androidx.core.content.FileProvider
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.shiroyama.messenger.core.storage.LocalSessionStorage
 import com.shiroyama.messenger.domain.model.Message
+import com.shiroyama.messenger.ui.components.AvatarView
 import com.shiroyama.messenger.ui.components.ChatInputBar
 import com.shiroyama.messenger.ui.components.MessageBubble
 import com.shiroyama.messenger.ui.components.StatusDot
@@ -201,7 +237,11 @@ fun ChatScreen(
     }
 
     LaunchedEffect(messages.size) {
-        if (messages.isNotEmpty()) listState.animateScrollToItem(messages.size - 1)
+        if (messages.isNotEmpty()) {
+            val lastVisible = listState.layoutInfo.visibleItemsInfo.lastOrNull()?.index ?: 0
+            val nearBottom = lastVisible >= messages.lastIndex - 2 || messages.lastOrNull()?.isMine == true
+            if (nearBottom) listState.animateScrollToItem(messages.size - 1)
+        }
     }
 
     LaunchedEffect(sendStatus) {
@@ -209,56 +249,78 @@ fun ChatScreen(
     }
 
     if (showAttachMenu) {
-        AlertDialog(
+        ModalBottomSheet(
             onDismissRequest = { showAttachMenu = false },
-            title = { Text("Вложение") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    AttachmentOption(Icons.Default.Image, "Фото / картинка") { showAttachMenu = false; imagePicker.launch(arrayOf("image/*")) }
-                    AttachmentOption(Icons.Default.Videocam, "Видео из галереи") { showAttachMenu = false; videoPicker.launch(arrayOf("video/*")) }
-                    AttachmentOption(Icons.Default.Videocam, "Записать кружок") {
-                        showAttachMenu = false
-                        if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchVideoNote() else cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                    }
-                    AttachmentOption(Icons.Default.InsertDriveFile, "Файл") { showAttachMenu = false; filePicker.launch(arrayOf("*/*")) }
-                }
-            },
-            confirmButton = {},
-            dismissButton = { TextButton(onClick = { showAttachMenu = false }) { Text("Отмена") } }
-        )
+            containerColor = ColorTokens.SurfaceElevated,
+            shape = ShapeTokens.Sheet
+        ) {
+            AttachmentSheet(
+                onPickPhoto = { showAttachMenu = false; imagePicker.launch(arrayOf("image/*")) },
+                onPickVideo = { showAttachMenu = false; videoPicker.launch(arrayOf("video/*")) },
+                onPickFile = { showAttachMenu = false; filePicker.launch(arrayOf("*/*")) },
+                onRecordVideoNote = {
+                    showAttachMenu = false
+                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchVideoNote() else cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                },
+                onCancel = { showAttachMenu = false }
+            )
+        }
     }
 
     pendingDeleteMessage?.let { msg ->
         AlertDialog(
             onDismissRequest = { viewModel.cancelDeleteMessage() },
-            title = { Text("Удалить сообщение у всех?") },
-            text = { Text("Сообщение исчезнет из истории чата у обоих профилей.") },
+            containerColor = ColorTokens.SurfaceElevated,
+            title = { Text("Удалить сообщение у всех?", color = ColorTokens.TextPrimary) },
+            text = { Text("Сообщение исчезнет из истории чата у обоих профилей.", color = ColorTokens.TextSecondary) },
             confirmButton = { TextButton(onClick = { viewModel.confirmDeleteMessageForEveryone() }) { Text("Удалить", color = ColorTokens.Error) } },
-            dismissButton = { TextButton(onClick = { viewModel.cancelDeleteMessage() }) { Text("Отмена") } }
+            dismissButton = { TextButton(onClick = { viewModel.cancelDeleteMessage() }) { Text("Отмена", color = ColorTokens.TextSecondary) } }
         )
     }
 
     Scaffold(
         topBar = {
-            TopAppBar(
-                title = {
-                    ChatHeader(peerName = peerName ?: peer?.displayName ?: "Чат", avatarBytes = peerAvatarBytes, peerOnline = peer?.isOnline == true, isTyping = isPeerTyping)
-                },
-                actions = { IconButton(onClick = onNavigateToSettings) { Icon(Icons.Default.Settings, contentDescription = "Settings", tint = ColorTokens.TextOnPrimary) } },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = ColorTokens.Primary, titleContentColor = ColorTokens.TextOnPrimary)
+            ChatTopBar(
+                peerName = peerName ?: peer?.displayName ?: "Чат",
+                avatarBytes = peerAvatarBytes,
+                peerOnline = peer?.isOnline == true,
+                isTyping = isPeerTyping,
+                onSettings = onNavigateToSettings
             )
         },
-        containerColor = ColorTokens.Background
+        containerColor = ColorTokens.Background,
+        bottomBar = {
+            ChatInputBar(
+                onSendMessage = { text -> viewModel.sendMessage(text) },
+                onTypingChanged = { text -> viewModel.onInputTyping(text) },
+                onAttachClick = { showAttachMenu = true },
+                onVoiceClick = {
+                    if (activeRecording != null) stopVoiceRecordingAndSend()
+                    else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) startVoiceRecording()
+                    else audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
+                },
+                onVideoNoteClick = {
+                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchVideoNote()
+                    else cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
+                },
+                isRecordingVoice = activeRecording != null,
+                replyToMessage = replyTarget,
+                onCancelReply = { viewModel.clearReplyTarget() }
+            )
+        }
     ) { innerPadding ->
-        Column(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .background(Brush.verticalGradient(listOf(ColorTokens.GradientStart, ColorTokens.Background, ColorTokens.BackgroundAlt)))
+                .padding(innerPadding)
+        ) {
             if (messages.isEmpty()) {
-                Box(modifier = Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Text("Пока пусто.\nНапиши первое сообщение", style = TypographyTokens.BodyLarge, color = ColorTokens.TextSecondary, textAlign = TextAlign.Center)
-                }
+                EmptyChatState(modifier = Modifier.align(Alignment.Center))
             } else {
                 LazyColumn(
                     state = listState,
-                    modifier = Modifier.weight(1f).fillMaxWidth().padding(horizontal = SpacingTokens.Medium),
+                    modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
                     verticalArrangement = Arrangement.Top
                 ) {
                     item { Spacer(modifier = Modifier.height(SpacingTokens.Small)) }
@@ -280,48 +342,34 @@ fun ChatScreen(
                     item { Spacer(modifier = Modifier.height(SpacingTokens.Small)) }
                 }
             }
-
-            ChatInputBar(
-                onSendMessage = { text -> viewModel.sendMessage(text) },
-                onTypingChanged = { text -> viewModel.onInputTyping(text) },
-                onAttachClick = { showAttachMenu = true },
-                onVoiceClick = {
-                    if (activeRecording != null) stopVoiceRecordingAndSend()
-                    else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) startVoiceRecording()
-                    else audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
-                },
-                onVideoNoteClick = {
-                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) launchVideoNote()
-                    else cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-                },
-                isRecordingVoice = activeRecording != null,
-                replyToMessage = replyTarget,
-                onCancelReply = { viewModel.clearReplyTarget() }
-            )
         }
     }
 }
 
 @Composable
-private fun ChatHeader(peerName: String, avatarBytes: ByteArray?, peerOnline: Boolean, isTyping: Boolean) {
-    Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-        HeaderAvatar(peerName, avatarBytes)
-        Column(modifier = Modifier.widthIn(max = 220.dp)) {
-            Text(peerName, style = TypographyTokens.TitleMedium, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
-                StatusDot(isOnline = peerOnline, showLabel = false)
-                if (isTyping) AnimatedTypingText() else Text(if (peerOnline) "online" else "offline", style = TypographyTokens.LabelSmall, color = ColorTokens.TextOnPrimary.copy(alpha = 0.72f))
+private fun ChatTopBar(peerName: String, avatarBytes: ByteArray?, peerOnline: Boolean, isTyping: Boolean, onSettings: () -> Unit) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(),
+        color = ColorTokens.Surface.copy(alpha = if (ColorTokens.IsDark) 0.96f else 0.92f),
+        shadowElevation = if (ColorTokens.IsDark) 0.dp else 8.dp
+    ) {
+        Row(
+            modifier = Modifier
+                .statusBarsPadding()
+                .padding(horizontal = 14.dp, vertical = 10.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            AvatarView(peerName, avatarBytes, size = 46.dp)
+            Spacer(Modifier.width(12.dp))
+            Column(modifier = Modifier.weight(1f).widthIn(max = 240.dp)) {
+                Text(peerName, style = TypographyTokens.TitleMedium, color = ColorTokens.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(5.dp)) {
+                    StatusDot(isOnline = peerOnline, showLabel = false)
+                    if (isTyping) AnimatedTypingText() else Text(if (peerOnline) "online" else "offline", style = TypographyTokens.LabelSmall, color = ColorTokens.TextSecondary)
+                }
             }
+            IconButton(onClick = onSettings) { Icon(Icons.Default.Settings, contentDescription = "Settings", tint = ColorTokens.Primary) }
         }
-    }
-}
-
-@Composable
-private fun HeaderAvatar(name: String, bytes: ByteArray?) {
-    val bitmap = bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
-    Box(modifier = Modifier.size(42.dp).clip(CircleShape).background(ColorTokens.TextOnPrimary.copy(alpha = 0.20f)), contentAlignment = Alignment.Center) {
-        if (bitmap != null) Image(bitmap = bitmap.asImageBitmap(), contentDescription = name, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-        else Text(name.firstOrNull()?.uppercaseChar()?.toString() ?: "?", color = ColorTokens.TextOnPrimary, style = TypographyTokens.TitleMedium)
     }
 }
 
@@ -329,25 +377,67 @@ private fun HeaderAvatar(name: String, bytes: ByteArray?) {
 private fun AnimatedTypingText() {
     val transition = rememberInfiniteTransition(label = "typingDots")
     val dot by transition.animateFloat(0f, 1f, infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "typing")
-    Text("печатает${".".repeat((dot * 3).toInt().coerceIn(1, 3))}", style = TypographyTokens.LabelSmall, color = ColorTokens.TextOnPrimary.copy(alpha = 0.82f))
+    Text("печатает${".".repeat((dot * 3).toInt().coerceIn(1, 3))}", style = TypographyTokens.LabelSmall, color = ColorTokens.Primary)
 }
 
 @Composable
 private fun TypingBubble() {
     val transition = rememberInfiniteTransition(label = "typingBubble")
     val scales = (0..2).map { i -> transition.animateFloat(0.55f, 1f, infiniteRepeatable(tween(430 + i * 70), RepeatMode.Reverse), label = "dot$i") }
-    Row(modifier = Modifier.padding(start = 8.dp, top = 2.dp, bottom = 8.dp).clip(ShapeTokens.Input).background(ColorTokens.InboundBubble).padding(horizontal = 14.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
-        scales.forEach { anim -> Box(modifier = Modifier.padding(horizontal = 2.dp).size((6 + anim.value * 3).dp).clip(CircleShape).background(ColorTokens.Primary.copy(alpha = 0.75f))) }
+    Row(modifier = Modifier.padding(start = 8.dp, top = 2.dp, bottom = 8.dp).background(ColorTokens.InboundBubble, ShapeTokens.Input).padding(horizontal = 14.dp, vertical = 9.dp), verticalAlignment = Alignment.CenterVertically) {
+        scales.forEach { anim -> Box(modifier = Modifier.padding(horizontal = 2.dp).size((6 + anim.value * 3).dp).background(ColorTokens.Primary.copy(alpha = 0.75f), CircleShape)) }
     }
 }
 
 @Composable
-private fun AttachmentOption(icon: androidx.compose.ui.graphics.vector.ImageVector, text: String, onClick: () -> Unit) {
-    TextButton(onClick = onClick, modifier = Modifier.fillMaxWidth()) {
-        Row(modifier = Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Icon(icon, contentDescription = null, tint = ColorTokens.Primary)
-            Spacer(Modifier.width(12.dp))
-            Text(text, color = ColorTokens.TextPrimary)
+private fun EmptyChatState(modifier: Modifier = Modifier) {
+    Card(
+        modifier = modifier.padding(24.dp),
+        colors = CardDefaults.cardColors(containerColor = ColorTokens.Surface.copy(alpha = 0.9f)),
+        shape = ShapeTokens.Card,
+        border = BorderStroke(1.dp, ColorTokens.BorderLight)
+    ) {
+        Column(modifier = Modifier.padding(28.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+            Text("Пока пусто", style = TypographyTokens.TitleMedium, color = ColorTokens.TextPrimary)
+            Spacer(Modifier.height(6.dp))
+            Text("Напиши первое сообщение — чат сразу оживёт", style = TypographyTokens.BodyMedium, color = ColorTokens.TextSecondary, textAlign = TextAlign.Center)
+        }
+    }
+}
+
+@Composable
+private fun AttachmentSheet(
+    onPickPhoto: () -> Unit,
+    onPickVideo: () -> Unit,
+    onPickFile: () -> Unit,
+    onRecordVideoNote: () -> Unit,
+    onCancel: () -> Unit
+) {
+    Column(modifier = Modifier.fillMaxWidth().navigationBarsPadding().imePadding().padding(horizontal = 18.dp, vertical = 10.dp)) {
+        Text("Attachment", style = TypographyTokens.TitleMedium, color = ColorTokens.TextPrimary, modifier = Modifier.padding(horizontal = 6.dp, vertical = 10.dp))
+        AttachmentOption(Icons.Default.Photo, "Photo", "Send an inline image", onPickPhoto)
+        AttachmentOption(Icons.Default.Videocam, "Video", "Send an inline video", onPickVideo)
+        AttachmentOption(Icons.Default.AttachFile, "File", "Compact file card", onPickFile)
+        AttachmentOption(Icons.Default.Videocam, "Record video note", "Circular message preview", onRecordVideoNote)
+        Divider(color = ColorTokens.BorderLight, modifier = Modifier.padding(vertical = 8.dp))
+        AttachmentOption(Icons.Default.Close, "Cancel", "Close menu", onCancel)
+        Spacer(Modifier.height(8.dp))
+    }
+}
+
+@Composable
+private fun AttachmentOption(icon: ImageVector, title: String, subtitle: String, onClick: () -> Unit) {
+    Row(
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onClick).padding(horizontal = 6.dp, vertical = 12.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Surface(shape = CircleShape, color = ColorTokens.AccentSoft) {
+            Icon(icon, contentDescription = null, tint = ColorTokens.Primary, modifier = Modifier.padding(11.dp).size(23.dp))
+        }
+        Spacer(Modifier.width(14.dp))
+        Column(modifier = Modifier.weight(1f)) {
+            Text(title, style = TypographyTokens.BodyLarge, color = ColorTokens.TextPrimary)
+            Text(subtitle, style = TypographyTokens.LabelSmall, color = ColorTokens.TextSecondary)
         }
     }
 }
