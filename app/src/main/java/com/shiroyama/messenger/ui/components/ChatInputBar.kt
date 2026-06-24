@@ -1,6 +1,7 @@
 package com.shiroyama.messenger.ui.components
 
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.Crossfade
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -28,7 +29,6 @@ import androidx.compose.material.icons.filled.Add
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.Mic
 import androidx.compose.material.icons.filled.Send
-import androidx.compose.material.icons.filled.Stop
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -53,6 +53,7 @@ import com.shiroyama.messenger.ui.theme.ColorTokens
 import com.shiroyama.messenger.ui.theme.ShapeTokens
 import com.shiroyama.messenger.ui.theme.SpacingTokens
 import com.shiroyama.messenger.ui.theme.TypographyTokens
+import kotlinx.coroutines.delay
 
 @Composable
 fun ChatInputBar(
@@ -64,7 +65,10 @@ fun ChatInputBar(
     isRecordingVoice: Boolean,
     modifier: Modifier = Modifier,
     replyToMessage: Message? = null,
-    onCancelReply: () -> Unit = {}
+    onCancelReply: () -> Unit = {},
+    recordingStartedAtMs: Long? = null,
+    onCancelVoiceRecording: () -> Unit = {},
+    onSendVoiceRecording: () -> Unit = onVoiceClick
 ) {
     var text by remember { mutableStateOf("") }
 
@@ -82,69 +86,95 @@ fun ChatInputBar(
                 .background(Brush.verticalGradient(listOf(ColorTokens.Surface.copy(alpha = 0.94f), ColorTokens.SurfaceElevated.copy(alpha = 0.98f))))
                 .padding(top = 8.dp)
         ) {
-            AnimatedVisibility(visible = replyToMessage != null) {
+            AnimatedVisibility(visible = replyToMessage != null && !isRecordingVoice) {
                 replyToMessage?.let { reply -> ReplyStrip(reply, onCancelReply) }
             }
 
-            AnimatedVisibility(visible = isRecordingVoice) {
-                RecordingStrip(modifier = Modifier.fillMaxWidth().padding(horizontal = SpacingTokens.Medium, vertical = SpacingTokens.Tiny))
-            }
-
-            Row(
-                modifier = Modifier
-                    .padding(horizontal = 10.dp, vertical = 8.dp)
-                    .navigationBarsPadding()
-                    .imePadding(),
-                verticalAlignment = Alignment.Bottom
-            ) {
-                SoftIconButton(onClick = onAttachClick) {
-                    Icon(Icons.Default.Add, contentDescription = "Attach")
-                }
-
-                Spacer(modifier = Modifier.width(6.dp))
-
-                Box(
-                    modifier = Modifier
-                        .weight(1f)
-                        .heightIn(min = 46.dp, max = 132.dp)
-                        .background(ColorTokens.AccentSoft, ShapeTokens.Input)
-                        .border(1.dp, ColorTokens.BorderLight.copy(alpha = 0.65f), ShapeTokens.Input)
-                        .padding(horizontal = 16.dp, vertical = 12.dp)
-                ) {
-                    if (text.isEmpty()) {
-                        Text(
-                            text = if (isRecordingVoice) "Recording voice…" else "Message…",
-                            style = TypographyTokens.BodyMedium,
-                            color = ColorTokens.TextSecondary
-                        )
-                    }
-                    BasicTextField(
-                        value = text,
-                        onValueChange = { text = it },
-                        enabled = !isRecordingVoice,
-                        textStyle = TypographyTokens.BodyMedium.copy(color = ColorTokens.TextPrimary),
-                        cursorBrush = SolidColor(ColorTokens.Primary),
-                        modifier = Modifier.fillMaxWidth()
+            Crossfade(targetState = isRecordingVoice, label = "composerRecordingCrossfade") { recording ->
+                if (recording) {
+                    RecordingVoicePanel(
+                        startedAtMs = recordingStartedAtMs,
+                        onCancel = onCancelVoiceRecording,
+                        onSend = onSendVoiceRecording,
+                        modifier = Modifier
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                            .navigationBarsPadding()
+                            .imePadding()
+                    )
+                } else {
+                    ComposerRow(
+                        text = text,
+                        onTextChange = { text = it },
+                        onAttachClick = onAttachClick,
+                        onSendMessage = {
+                            onSendMessage(text)
+                            text = ""
+                        },
+                        onVoiceClick = onVoiceClick,
+                        onVideoNoteClick = onVideoNoteClick,
+                        modifier = Modifier
+                            .padding(horizontal = 10.dp, vertical = 8.dp)
+                            .navigationBarsPadding()
+                            .imePadding()
                     )
                 }
+            }
+        }
+    }
+}
 
-                Spacer(modifier = Modifier.width(6.dp))
+@Composable
+private fun ComposerRow(
+    text: String,
+    onTextChange: (String) -> Unit,
+    onAttachClick: () -> Unit,
+    onSendMessage: () -> Unit,
+    onVoiceClick: () -> Unit,
+    onVideoNoteClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Row(modifier = modifier, verticalAlignment = Alignment.Bottom) {
+        SoftIconButton(onClick = onAttachClick) {
+            Icon(Icons.Default.Add, contentDescription = "Attach")
+        }
 
-                val isSendActive = text.trim().isNotEmpty() && !isRecordingVoice
-                if (isSendActive) {
-                    IconButton(
-                        onClick = { onSendMessage(text); text = "" },
-                        colors = IconButtonDefaults.iconButtonColors(containerColor = ColorTokens.Primary, contentColor = ColorTokens.TextOnPrimary)
-                    ) { Icon(Icons.Default.Send, contentDescription = "Send") }
-                } else {
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        SoftIconButton(onClick = onVideoNoteClick) {
-                            Icon(Icons.Default.Videocam, contentDescription = "Video note")
-                        }
-                        Spacer(modifier = Modifier.width(4.dp))
-                        PulseIconButton(active = isRecordingVoice, onClick = onVoiceClick)
-                    }
+        Spacer(modifier = Modifier.width(6.dp))
+
+        Box(
+            modifier = Modifier
+                .weight(1f)
+                .heightIn(min = 46.dp, max = 132.dp)
+                .background(ColorTokens.AccentSoft, ShapeTokens.Input)
+                .border(1.dp, ColorTokens.BorderLight.copy(alpha = 0.65f), ShapeTokens.Input)
+                .padding(horizontal = 16.dp, vertical = 12.dp)
+        ) {
+            if (text.isEmpty()) {
+                Text("Message…", style = TypographyTokens.BodyMedium, color = ColorTokens.TextSecondary)
+            }
+            BasicTextField(
+                value = text,
+                onValueChange = onTextChange,
+                textStyle = TypographyTokens.BodyMedium.copy(color = ColorTokens.TextPrimary),
+                cursorBrush = SolidColor(ColorTokens.Primary),
+                modifier = Modifier.fillMaxWidth()
+            )
+        }
+
+        Spacer(modifier = Modifier.width(6.dp))
+
+        val isSendActive = text.trim().isNotEmpty()
+        if (isSendActive) {
+            IconButton(
+                onClick = onSendMessage,
+                colors = IconButtonDefaults.iconButtonColors(containerColor = ColorTokens.Primary, contentColor = ColorTokens.TextOnPrimary)
+            ) { Icon(Icons.Default.Send, contentDescription = "Send") }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                SoftIconButton(onClick = onVideoNoteClick) {
+                    Icon(Icons.Default.Videocam, contentDescription = "Video note")
                 }
+                Spacer(modifier = Modifier.width(4.dp))
+                PulseMicButton(onClick = onVoiceClick)
             }
         }
     }
@@ -189,53 +219,105 @@ private fun SoftIconButton(onClick: () -> Unit, content: @Composable () -> Unit)
 }
 
 @Composable
-private fun PulseIconButton(active: Boolean, onClick: () -> Unit) {
-    val transition = rememberInfiniteTransition(label = "recordPulse")
+private fun PulseMicButton(onClick: () -> Unit) {
+    val transition = rememberInfiniteTransition(label = "micIdlePulse")
     val scale by transition.animateFloat(
         initialValue = 1f,
-        targetValue = if (active) 1.14f else 1f,
-        animationSpec = infiniteRepeatable(animation = tween(620), repeatMode = RepeatMode.Reverse),
-        label = "recordScale"
+        targetValue = 1.05f,
+        animationSpec = infiniteRepeatable(animation = tween(1100), repeatMode = RepeatMode.Reverse),
+        label = "micScale"
     )
     IconButton(
         onClick = onClick,
         modifier = Modifier.scale(scale),
         colors = IconButtonDefaults.iconButtonColors(
-            containerColor = if (active) ColorTokens.Error else ColorTokens.Primary,
+            containerColor = ColorTokens.Primary,
             contentColor = ColorTokens.TextOnPrimary
         )
-    ) { Icon(if (active) Icons.Default.Stop else Icons.Default.Mic, contentDescription = "Voice message") }
+    ) { Icon(Icons.Default.Mic, contentDescription = "Voice message") }
 }
 
 @Composable
-private fun RecordingStrip(modifier: Modifier = Modifier) {
-    val transition = rememberInfiniteTransition(label = "voiceWaves")
-    val pulse by transition.animateFloat(0.72f, 1f, infiniteRepeatable(tween(560), RepeatMode.Reverse), label = "recPulse")
-    val heights = (0 until 22).map { i ->
-        transition.animateFloat(
-            initialValue = 0.22f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(animation = tween(430 + i * 22), repeatMode = RepeatMode.Reverse),
-            label = "wave$i"
-        )
+private fun RecordingVoicePanel(
+    startedAtMs: Long?,
+    onCancel: () -> Unit,
+    onSend: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    var now by remember(startedAtMs) { mutableStateOf(System.currentTimeMillis()) }
+    LaunchedEffect(startedAtMs) {
+        while (true) {
+            now = System.currentTimeMillis()
+            delay(250)
+        }
     }
+    val elapsedMs = (now - (startedAtMs ?: now)).coerceAtLeast(0L)
+
     Row(
         modifier = modifier
+            .fillMaxWidth()
             .background(ColorTokens.Error.copy(alpha = 0.10f), ShapeTokens.Input)
-            .border(1.dp, ColorTokens.Error.copy(alpha = 0.18f), ShapeTokens.Input)
-            .padding(horizontal = 14.dp, vertical = 10.dp),
+            .border(1.dp, ColorTokens.Error.copy(alpha = 0.20f), ShapeTokens.Input)
+            .padding(horizontal = 10.dp, vertical = 9.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
-        Box(Modifier.size((8 + pulse * 4).dp).background(ColorTokens.Error, CircleShape))
-        Text("REC", style = TypographyTokens.LabelSmall, color = ColorTokens.Error)
+        IconButton(
+            onClick = onCancel,
+            colors = IconButtonDefaults.iconButtonColors(containerColor = ColorTokens.SurfaceElevated, contentColor = ColorTokens.Error)
+        ) { Icon(Icons.Default.Close, contentDescription = "Cancel voice") }
+
+        Column(modifier = Modifier.weight(1f)) {
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                RecordingDot()
+                Text("Recording", style = TypographyTokens.LabelSmall, color = ColorTokens.Error)
+                Text(formatElapsed(elapsedMs), style = TypographyTokens.LabelSmall, color = ColorTokens.TextSecondary)
+            }
+            Spacer(Modifier.height(5.dp))
+            RecordingWaveform()
+        }
+
+        IconButton(
+            onClick = onSend,
+            colors = IconButtonDefaults.iconButtonColors(containerColor = ColorTokens.Primary, contentColor = ColorTokens.TextOnPrimary)
+        ) { Icon(Icons.Default.Send, contentDescription = "Send voice") }
+    }
+}
+
+@Composable
+private fun RecordingDot() {
+    val transition = rememberInfiniteTransition(label = "recordPulse")
+    val scale by transition.animateFloat(0.72f, 1.18f, infiniteRepeatable(tween(580), RepeatMode.Reverse), label = "recordScale")
+    Box(Modifier.size((9 * scale).dp).background(ColorTokens.Error, CircleShape))
+}
+
+@Composable
+private fun RecordingWaveform() {
+    val transition = rememberInfiniteTransition(label = "voiceWaves")
+    val heights = (0 until 26).map { i ->
+        transition.animateFloat(
+            initialValue = 0.24f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(animation = tween(360 + i * 18), repeatMode = RepeatMode.Reverse),
+            label = "wave$i"
+        )
+    }
+    Row(verticalAlignment = Alignment.CenterVertically) {
         heights.forEach { animated ->
             Box(
                 modifier = Modifier
+                    .padding(horizontal = 1.dp)
                     .width(3.dp)
-                    .height((6 + 22 * animated.value).dp)
-                    .background(ColorTokens.Error.copy(alpha = 0.78f), ShapeTokens.Button)
+                    .height((7 + 22 * animated.value).dp)
+                    .background(ColorTokens.Error.copy(alpha = 0.72f), ShapeTokens.Button)
             )
         }
     }
+}
+
+private fun formatElapsed(ms: Long): String {
+    val total = (ms / 1000L).coerceAtLeast(0L)
+    val minutes = total / 60L
+    val seconds = total % 60L
+    return "%d:%02d".format(minutes, seconds)
 }
