@@ -1,6 +1,8 @@
 package com.shiroyama.messenger.ui.screens.chat
 
 import android.Manifest
+import android.content.ClipData
+import android.content.ClipboardManager
 import android.content.Context
 import android.content.Intent
 import android.content.pm.PackageManager
@@ -83,8 +85,18 @@ import com.shiroyama.messenger.ui.components.AvatarView
 import com.shiroyama.messenger.ui.components.ChatBackground
 import com.shiroyama.messenger.ui.components.ChatInputBar
 import com.shiroyama.messenger.ui.components.DateSeparator
+import com.shiroyama.messenger.ui.components.MessageActionMenuKt
 import com.shiroyama.messenger.ui.components.MessageBubble
+import com.shiroyama.messenger.ui.components.MessageSelectionOverlay
 import com.shiroyama.messenger.ui.components.StatusDot
+import com.shiroyama.messenger.ui.media.FullscreenMediaViewer
+import com.shiroyama.messenger.ui.media.MediaCacheManager
+import com.shiroyama.messenger.ui.media.MediaLoadState
+import com.shiroyama.messenger.ui.media.MediaSaver
+import com.shiroyama.messenger.ui.network.ConnectionState
+import com.shiroyama.messenger.ui.network.ConnectionStatusBanner
+import com.shiroyama.messenger.ui.network.NetworkMonitor
+import com.shiroyama.messenger.ui.network.classifyConnectionError
 import com.shiroyama.messenger.ui.theme.ColorTokens
 import com.shiroyama.messenger.ui.theme.ShapeTokens
 import com.shiroyama.messenger.ui.theme.SpacingTokens
@@ -92,11 +104,13 @@ import com.shiroyama.messenger.ui.theme.TypographyTokens
 import java.io.File
 import java.time.LocalDate
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
 private data class PickedAttachment(val fileName: String, val mimeType: String, val bytes: ByteArray)
 private data class ActiveRecording(val recorder: MediaRecorder, val file: File, val startedAt: Long)
+private data class ViewerState(val message: Message, val media: MediaLoadState)
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -122,15 +136,77 @@ fun ChatScreen(
     var activeRecording by remember { mutableStateOf<ActiveRecording?>(null) }
     var pendingVideoNoteFile by remember { mutableStateOf<File?>(null) }
     var pendingVideoNoteUri by remember { mutableStateOf<Uri?>(null) }
+    var selectedMessage by remember { mutableStateOf<Message?>(null) }
+    var viewerState by remember { mutableStateOf<ViewerState?>(null) }
+    var networkAvailable by remember { mutableStateOf(NetworkMonitor.isAvailable(context)) }
+
+    val connectionState = when {
+        !networkAvailable -> ConnectionState.Offline
+        sendStatus is SendStatus.Error -> classifyConnectionError((sendStatus as SendStatus.Error).message)
+        messages.isEmpty() -> ConnectionState.Connecting
+        else -> ConnectionState.Connected
+    }
+
+    LaunchedEffect(Unit) {
+        while (true) {
+            networkAvailable = NetworkMonitor.isAvailable(context)
+            delay(2500)
+        }
+    }
+
+    fun showToast(text: String) {
+        Toast.makeText(context, text, Toast.LENGTH_SHORT).show()
+    }
+
+    fun copyMessage(message: Message) {
+        val text = message.text.ifBlank { message.mediaOriginalName.orEmpty() }
+        if (text.isBlank()) return
+        val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+        clipboard.setPrimaryClip(ClipData.newPlainText("MasyaLink message", text))
+        showToast("Copied")
+    }
+
+    fun loadMedia(message: Message, onLoaded: (MediaLoadState) -> Unit) {
+        coroutineScope.launch {
+            val state = MediaCacheManager.load(context, message) { viewModel.downloadAttachmentDirect(it) }
+            onLoaded(state)
+        }
+    }
+
+    fun saveMessageMedia(message: Message) {
+        selectedMessage = null
+        loadMedia(message) { state ->
+            val ready = state as? MediaLoadState.Ready
+            if (ready == null) {
+                showToast((state as? MediaLoadState.Error)?.message ?: "Media is not ready")
+                return@loadMedia
+            }
+            coroutineScope.launch {
+                val result = MediaSaver.saveToPublicStorage(context, ready)
+                result.onSuccess { showToast("Saved") }
+                    .onFailure { showToast(it.message ?: "Save failed") }
+            }
+        }
+    }
+
+    fun openMedia(message: Message, state: MediaLoadState) {
+        if (message.type !in setOf("image", "video", "video_note", "file", "voice")) return
+        if (state is MediaLoadState.Ready) {
+            viewerState = ViewerState(message, state)
+        } else {
+            viewerState = ViewerState(message, MediaLoadState.Loading())
+            loadMedia(message) { loaded -> viewerState = ViewerState(message, loaded) }
+        }
+    }
 
     fun sendPicked(uri: Uri?) {
         if (uri == null) return
         coroutineScope.launch {
             val picked = withContext(Dispatchers.IO) { readPickedAttachment(context, uri) }
             if (picked == null) {
-                Toast.makeText(context, "Не удалось прочитать файл", Toast.LENGTH_SHORT).show()
+                showToast("Не удалось прочитать файл")
             } else if (picked.bytes.size > 25L * 1024L * 1024L) {
-                Toast.makeText(context, "Файл больше 25 MB", Toast.LENGTH_SHORT).show()
+                showToast("Файл больше 25 MB")
             } else {
                 viewModel.sendAttachment(picked.fileName, picked.mimeType, picked.bytes)
             }
@@ -172,7 +248,7 @@ fun ChatScreen(
         val recording = activeRecording ?: return
         activeRecording = null
         releaseRecording(recording, deleteFile = true)
-        Toast.makeText(context, "Запись отменена", Toast.LENGTH_SHORT).show()
+        showToast("Запись отменена")
     }
 
     fun stopVoiceRecordingAndSend() {
@@ -184,7 +260,7 @@ fun ChatScreen(
             try {
                 val bytes = withContext(Dispatchers.IO) { recording.file.readBytes() }
                 if (durationMs < 500 || bytes.isEmpty()) {
-                    Toast.makeText(context, "Голосовое слишком короткое", Toast.LENGTH_SHORT).show()
+                    showToast("Голосовое слишком короткое")
                     recording.file.delete()
                     return@launch
                 }
@@ -278,10 +354,6 @@ fun ChatScreen(
         }
     }
 
-    LaunchedEffect(sendStatus) {
-        if (sendStatus is SendStatus.Error) Toast.makeText(context, (sendStatus as SendStatus.Error).message, Toast.LENGTH_SHORT).show()
-    }
-
     if (showAttachMenu) {
         ModalBottomSheet(
             onDismissRequest = { showAttachMenu = false },
@@ -347,37 +419,66 @@ fun ChatScreen(
     ) { innerPadding ->
         ChatBackground {
             Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
-                if (messages.isEmpty()) {
-                    EmptyChatState(modifier = Modifier.align(Alignment.Center))
-                } else {
-                    LazyColumn(
-                        state = listState,
-                        modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
-                        verticalArrangement = Arrangement.Top
-                    ) {
-                        item { Spacer(modifier = Modifier.height(SpacingTokens.Small)) }
-                        itemsIndexed(messages, key = { _, item -> item.id }) { index, msg ->
-                            val currentDate = dateLabel(msg.createdAt)
-                            val previousDate = messages.getOrNull(index - 1)?.let { dateLabel(it.createdAt) }
-                            if (currentDate != previousDate) {
-                                DateSeparator(currentDate)
-                            }
-                            MessageBubble(
-                                message = msg,
-                                onReply = { viewModel.startReplyToMessage(it) },
-                                onDelete = { viewModel.requestDeleteMessage(it) },
-                                onAttachmentClick = { message ->
-                                    viewModel.downloadAttachment(message) { result ->
-                                        result.onSuccess { openDownloadedAttachment(context, it) }
-                                            .onFailure { error -> Toast.makeText(context, error.message ?: "Не удалось открыть файл", Toast.LENGTH_LONG).show() }
-                                    }
-                                },
-                                onLoadAttachmentPreview = { message -> viewModel.downloadAttachmentDirect(message) }
-                            )
+                Column(modifier = Modifier.fillMaxSize()) {
+                    ConnectionStatusBanner(connectionState)
+                    if (messages.isEmpty()) {
+                        Box(modifier = Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            EmptyChatState()
                         }
-                        if (isPeerTyping) item { TypingBubble() }
-                        item { Spacer(modifier = Modifier.height(SpacingTokens.Small)) }
+                    } else {
+                        LazyColumn(
+                            state = listState,
+                            modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                            verticalArrangement = Arrangement.Top
+                        ) {
+                            item { Spacer(modifier = Modifier.height(SpacingTokens.Small)) }
+                            itemsIndexed(messages, key = { _, item -> item.id }) { index, msg ->
+                                val currentDate = dateLabel(msg.createdAt)
+                                val previousDate = messages.getOrNull(index - 1)?.let { dateLabel(it.createdAt) }
+                                if (currentDate != previousDate) DateSeparator(currentDate)
+                                MessageBubble(
+                                    message = msg,
+                                    onReply = { viewModel.startReplyToMessage(it) },
+                                    onDelete = { viewModel.requestDeleteMessage(it) },
+                                    onAttachmentClick = { message ->
+                                        loadMedia(message) { state ->
+                                            val ready = state as? MediaLoadState.Ready
+                                            if (ready != null && message.type in setOf("image", "video", "video_note", "voice")) {
+                                                viewerState = ViewerState(message, ready)
+                                            } else if (ready != null) {
+                                                openDownloadedAttachment(context, ready)
+                                            } else {
+                                                showToast((state as? MediaLoadState.Error)?.message ?: "Media unavailable")
+                                            }
+                                        }
+                                    },
+                                    onOpenMedia = { message, state -> openMedia(message, state) },
+                                    onLongPress = { selectedMessage = it },
+                                    onLoadAttachmentPreview = { message -> viewModel.downloadAttachmentDirect(message) }
+                                )
+                            }
+                            if (isPeerTyping) item { TypingBubble() }
+                            item { Spacer(modifier = Modifier.height(SpacingTokens.Small)) }
+                        }
                     }
+                }
+
+                MessageSelectionOverlay(
+                    selectedMessage = selectedMessage,
+                    onDismiss = { selectedMessage = null },
+                    onReply = { selectedMessage = null; viewModel.startReplyToMessage(it) },
+                    onCopy = { selectedMessage = null; copyMessage(it) },
+                    onDownload = { saveMessageMedia(it) },
+                    onDelete = { selectedMessage = null; viewModel.requestDeleteMessage(it) }
+                )
+
+                viewerState?.let { current ->
+                    FullscreenMediaViewer(
+                        message = current.message,
+                        state = current.media,
+                        onClose = { viewerState = null },
+                        onDownload = { saveMessageMedia(current.message) }
+                    )
                 }
             }
         }
@@ -502,12 +603,9 @@ private fun extractVideoDurationMs(file: File): Int? {
     }.getOrNull()
 }
 
-private fun openDownloadedAttachment(context: Context, attachment: AttachmentDownload) {
-    val safeName = attachment.fileName.replace(Regex("[^A-Za-z0-9А-Яа-я._-]"), "_").ifBlank { "attachment" }
-    val file = File(context.cacheDir, safeName)
-    file.outputStream().use { it.write(attachment.bytes) }
-    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-    val intent = Intent(Intent.ACTION_VIEW).apply { setDataAndType(uri, attachment.mimeType); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }
+private fun openDownloadedAttachment(context: Context, ready: MediaLoadState.Ready) {
+    val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", ready.file)
+    val intent = Intent(Intent.ACTION_VIEW).apply { setDataAndType(uri, ready.mimeType); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }
     try { context.startActivity(Intent.createChooser(intent, "Открыть вложение")) } catch (e: Exception) { Toast.makeText(context, "Нет приложения для открытия файла", Toast.LENGTH_LONG).show() }
 }
 
