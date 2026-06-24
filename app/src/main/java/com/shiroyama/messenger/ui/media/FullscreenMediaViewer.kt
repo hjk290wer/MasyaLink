@@ -128,7 +128,8 @@ private fun FullscreenVideo(ready: MediaLoadState.Ready, circular: Boolean) {
         while (playing) {
             val view = videoView
             val duration = view?.duration ?: 0
-            if (duration > 0) progress = (view.currentPosition.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
+            val current = view?.currentPosition ?: 0
+            if (duration > 0) progress = (current.toFloat() / duration.toFloat()).coerceIn(0f, 1f)
             delay(160)
         }
     }
