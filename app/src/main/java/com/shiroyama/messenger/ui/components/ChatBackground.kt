@@ -4,7 +4,10 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.offset
+import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Surface
@@ -13,6 +16,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import com.shiroyama.messenger.ui.theme.ColorTokens
 import com.shiroyama.messenger.ui.theme.ShapeTokens
@@ -50,7 +54,12 @@ private fun DecorativeOrb(modifier: Modifier, alpha: Float) {
 
 @Composable
 fun DateSeparator(label: String, modifier: Modifier = Modifier) {
-    Box(modifier = modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+    Box(
+        modifier = modifier
+            .fillMaxWidth()
+            .padding(vertical = 10.dp),
+        contentAlignment = Alignment.Center
+    ) {
         Surface(
             shape = ShapeTokens.Button,
             color = ColorTokens.Surface.copy(alpha = if (ColorTokens.IsDark) 0.70f else 0.76f),
@@ -61,7 +70,11 @@ fun DateSeparator(label: String, modifier: Modifier = Modifier) {
                 text = label,
                 style = TypographyTokens.LabelSmall,
                 color = ColorTokens.TextSecondary,
-                modifier = Modifier.background(ColorTokens.AccentSoft.copy(alpha = 0.22f)).size(width = 108.dp, height = 28.dp),
+                textAlign = TextAlign.Center,
+                modifier = Modifier
+                    .background(ColorTokens.AccentSoft.copy(alpha = 0.22f))
+                    .height(28.dp)
+                    .padding(horizontal = 16.dp, vertical = 6.dp)
             )
         }
     }
