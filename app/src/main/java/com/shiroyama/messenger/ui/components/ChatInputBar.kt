@@ -1,20 +1,11 @@
 package com.shiroyama.messenger.ui.components
 
-import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.ExperimentalAnimationApi
-import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.scaleIn
-import androidx.compose.animation.scaleOut
-import androidx.compose.animation.togetherWith
-import androidx.compose.animation.using
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Arrangement
@@ -63,7 +54,6 @@ import com.shiroyama.messenger.ui.theme.ShapeTokens
 import com.shiroyama.messenger.ui.theme.SpacingTokens
 import com.shiroyama.messenger.ui.theme.TypographyTokens
 
-@OptIn(ExperimentalAnimationApi::class)
 @Composable
 fun ChatInputBar(
     onSendMessage: (String) -> Unit,
@@ -141,24 +131,18 @@ fun ChatInputBar(
                 Spacer(modifier = Modifier.width(6.dp))
 
                 val isSendActive = text.trim().isNotEmpty() && !isRecordingVoice
-                AnimatedContent(
-                    targetState = isSendActive,
-                    transitionSpec = { (fadeIn(tween(120)) + scaleIn(initialScale = 0.86f)) togetherWith (fadeOut(tween(90)) + scaleOut(targetScale = 0.86f)) using SizeTransform(clip = false) },
-                    label = "sendMicMorph"
-                ) { sendActive ->
-                    if (sendActive) {
-                        IconButton(
-                            onClick = { onSendMessage(text); text = "" },
-                            colors = IconButtonDefaults.iconButtonColors(containerColor = ColorTokens.Primary, contentColor = ColorTokens.TextOnPrimary)
-                        ) { Icon(Icons.Default.Send, contentDescription = "Send") }
-                    } else {
-                        Row(verticalAlignment = Alignment.CenterVertically) {
-                            SoftIconButton(onClick = onVideoNoteClick) {
-                                Icon(Icons.Default.Videocam, contentDescription = "Video note")
-                            }
-                            Spacer(modifier = Modifier.width(4.dp))
-                            PulseIconButton(active = isRecordingVoice, onClick = onVoiceClick)
+                if (isSendActive) {
+                    IconButton(
+                        onClick = { onSendMessage(text); text = "" },
+                        colors = IconButtonDefaults.iconButtonColors(containerColor = ColorTokens.Primary, contentColor = ColorTokens.TextOnPrimary)
+                    ) { Icon(Icons.Default.Send, contentDescription = "Send") }
+                } else {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        SoftIconButton(onClick = onVideoNoteClick) {
+                            Icon(Icons.Default.Videocam, contentDescription = "Video note")
                         }
+                        Spacer(modifier = Modifier.width(4.dp))
+                        PulseIconButton(active = isRecordingVoice, onClick = onVoiceClick)
                     }
                 }
             }
