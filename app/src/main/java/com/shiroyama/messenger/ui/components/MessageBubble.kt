@@ -33,7 +33,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.DoneAll
@@ -51,7 +50,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
@@ -297,7 +295,7 @@ private fun VoiceMessageContent(
     val context = LocalContext.current
     var loading by remember(message.mediaPath) { mutableStateOf(true) }
     var playing by remember(message.mediaPath) { mutableStateOf(false) }
-    var progress by remember(message.mediaPath) { mutableFloatStateOf(0f) }
+    var progress by remember(message.mediaPath) { mutableStateOf(0f) }
     var player by remember(message.mediaPath) { mutableStateOf<MediaPlayer?>(null) }
 
     DisposableEffect(message.mediaPath) {
