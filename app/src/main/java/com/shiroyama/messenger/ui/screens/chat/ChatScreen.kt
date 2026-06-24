@@ -58,11 +58,13 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -89,6 +91,9 @@ import com.shiroyama.messenger.ui.theme.SpacingTokens
 import com.shiroyama.messenger.ui.theme.TypographyTokens
 import java.io.File
 import java.time.LocalDate
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private data class PickedAttachment(val fileName: String, val mimeType: String, val bytes: ByteArray)
 private data class ActiveRecording(val recorder: MediaRecorder, val file: File, val startedAt: Long)
@@ -102,6 +107,7 @@ fun ChatScreen(
     viewModel: ChatViewModel = viewModel()
 ) {
     val context = LocalContext.current
+    val coroutineScope = rememberCoroutineScope()
     val messages by viewModel.messages.collectAsState()
     val peer by viewModel.peerDevice.collectAsState()
     val peerName by viewModel.peerDisplayName.collectAsState()
@@ -119,13 +125,15 @@ fun ChatScreen(
 
     fun sendPicked(uri: Uri?) {
         if (uri == null) return
-        val picked = readPickedAttachment(context, uri)
-        if (picked == null) {
-            Toast.makeText(context, "Не удалось прочитать файл", Toast.LENGTH_SHORT).show()
-        } else if (picked.bytes.size > 25L * 1024L * 1024L) {
-            Toast.makeText(context, "Файл больше 25 MB", Toast.LENGTH_SHORT).show()
-        } else {
-            viewModel.sendAttachment(picked.fileName, picked.mimeType, picked.bytes)
+        coroutineScope.launch {
+            val picked = withContext(Dispatchers.IO) { readPickedAttachment(context, uri) }
+            if (picked == null) {
+                Toast.makeText(context, "Не удалось прочитать файл", Toast.LENGTH_SHORT).show()
+            } else if (picked.bytes.size > 25L * 1024L * 1024L) {
+                Toast.makeText(context, "Файл больше 25 MB", Toast.LENGTH_SHORT).show()
+            } else {
+                viewModel.sendAttachment(picked.fileName, picked.mimeType, picked.bytes)
+            }
         }
     }
 
@@ -133,7 +141,14 @@ fun ChatScreen(
     val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { sendPicked(it) }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { sendPicked(it) }
 
+    fun releaseRecording(recording: ActiveRecording, deleteFile: Boolean) {
+        try { recording.recorder.stop() } catch (_: Exception) {}
+        try { recording.recorder.release() } catch (_: Exception) {}
+        if (deleteFile) recording.file.delete()
+    }
+
     fun startVoiceRecording() {
+        if (activeRecording != null) return
         try {
             val file = File(context.cacheDir, "voice_${System.currentTimeMillis()}.m4a")
             @Suppress("DEPRECATION")
@@ -156,35 +171,43 @@ fun ChatScreen(
     fun cancelVoiceRecording() {
         val recording = activeRecording ?: return
         activeRecording = null
-        try { recording.recorder.stop() } catch (_: Exception) {}
-        try { recording.recorder.release() } catch (_: Exception) {}
-        recording.file.delete()
+        releaseRecording(recording, deleteFile = true)
         Toast.makeText(context, "Запись отменена", Toast.LENGTH_SHORT).show()
     }
 
     fun stopVoiceRecordingAndSend() {
         val recording = activeRecording ?: return
         activeRecording = null
-        try {
-            val durationMs = (System.currentTimeMillis() - recording.startedAt).toInt().coerceAtLeast(0)
-            try { recording.recorder.stop() } catch (_: Exception) {}
-            recording.recorder.release()
-            val bytes = recording.file.readBytes()
-            if (durationMs < 500 || bytes.isEmpty()) {
-                Toast.makeText(context, "Голосовое слишком короткое", Toast.LENGTH_SHORT).show()
+        val durationMs = (System.currentTimeMillis() - recording.startedAt).toInt().coerceAtLeast(0)
+        releaseRecording(recording, deleteFile = false)
+        coroutineScope.launch {
+            try {
+                val bytes = withContext(Dispatchers.IO) { recording.file.readBytes() }
+                if (durationMs < 500 || bytes.isEmpty()) {
+                    Toast.makeText(context, "Голосовое слишком короткое", Toast.LENGTH_SHORT).show()
+                    recording.file.delete()
+                    return@launch
+                }
+                viewModel.sendAttachment(
+                    fileName = recording.file.name,
+                    mimeType = "audio/mp4",
+                    bytes = bytes,
+                    forcedType = "voice",
+                    durationMs = durationMs
+                )
+            } catch (e: Exception) {
+                e.printStackTrace()
+                Toast.makeText(context, e.message ?: "Не удалось отправить голосовое", Toast.LENGTH_LONG).show()
+            } finally {
                 recording.file.delete()
-                return
             }
-            viewModel.sendAttachment(
-                fileName = recording.file.name,
-                mimeType = "audio/mp4",
-                bytes = bytes,
-                forcedType = "voice",
-                durationMs = durationMs
-            )
-        } catch (e: Exception) {
-            e.printStackTrace()
-            Toast.makeText(context, e.message ?: "Не удалось отправить голосовое", Toast.LENGTH_LONG).show()
+        }
+    }
+
+    DisposableEffect(Unit) {
+        onDispose {
+            activeRecording?.let { releaseRecording(it, deleteFile = true) }
+            activeRecording = null
         }
     }
 
@@ -199,17 +222,20 @@ fun ChatScreen(
     val videoNoteLauncher = rememberLauncherForActivityResult(ActivityResultContracts.CaptureVideo()) { success ->
         val file = pendingVideoNoteFile
         if (success && file != null && file.exists() && file.length() > 0) {
-            val bytes = file.readBytes()
-            if (bytes.size > 25L * 1024L * 1024L) {
-                Toast.makeText(context, "Кружок больше 25 MB", Toast.LENGTH_LONG).show()
-            } else {
-                viewModel.sendAttachment(
-                    fileName = file.name,
-                    mimeType = "video/mp4",
-                    bytes = bytes,
-                    forcedType = "video_note",
-                    durationMs = extractVideoDurationMs(file)
-                )
+            coroutineScope.launch {
+                val bytes = withContext(Dispatchers.IO) { file.readBytes() }
+                if (bytes.size > 25L * 1024L * 1024L) {
+                    Toast.makeText(context, "Кружок больше 25 MB", Toast.LENGTH_LONG).show()
+                } else {
+                    viewModel.sendAttachment(
+                        fileName = file.name,
+                        mimeType = "video/mp4",
+                        bytes = bytes,
+                        forcedType = "video_note",
+                        durationMs = extractVideoDurationMs(file)
+                    )
+                }
+                file.delete()
             }
         } else if (success) {
             Toast.makeText(context, "Не удалось сохранить кружок", Toast.LENGTH_LONG).show()
