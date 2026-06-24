@@ -6,9 +6,11 @@ import android.net.NetworkCapabilities
 
 object NetworkMonitor {
     fun isAvailable(context: Context): Boolean {
-        val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
-        val network = manager.activeNetwork ?: return false
-        val caps = manager.getNetworkCapabilities(network) ?: return false
-        return caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        return runCatching {
+            val manager = context.getSystemService(Context.CONNECTIVITY_SERVICE) as ConnectivityManager
+            val network = manager.activeNetwork ?: return false
+            val caps = manager.getNetworkCapabilities(network) ?: return false
+            caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_INTERNET)
+        }.getOrDefault(true)
     }
 }
