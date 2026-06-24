@@ -9,6 +9,7 @@ import android.widget.VideoView
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.tween
@@ -18,6 +19,7 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -28,6 +30,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
@@ -39,6 +42,7 @@ import androidx.compose.material.icons.filled.DoneAll
 import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Pause
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Reply
 import androidx.compose.material.icons.filled.Videocam
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -58,18 +62,24 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.draw.scale
 import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.hapticfeedback.HapticFeedbackType
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import com.shiroyama.messenger.domain.model.Message
+import com.shiroyama.messenger.ui.media.MediaCacheManager
+import com.shiroyama.messenger.ui.media.MediaLoadState
 import com.shiroyama.messenger.ui.screens.chat.AttachmentDownload
 import com.shiroyama.messenger.ui.theme.ColorTokens
 import com.shiroyama.messenger.ui.theme.ShapeTokens
 import com.shiroyama.messenger.ui.theme.SpacingTokens
 import com.shiroyama.messenger.ui.theme.TypographyTokens
-import java.io.File
+import kotlin.math.abs
+import kotlin.math.roundToInt
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
@@ -81,6 +91,8 @@ fun MessageBubble(
     onReply: (Message) -> Unit = {},
     onDelete: (Message) -> Unit = {},
     onAttachmentClick: (Message) -> Unit = {},
+    onOpenMedia: (Message, MediaLoadState) -> Unit = { _, _ -> },
+    onLongPress: (Message) -> Unit = {},
     onLoadAttachmentPreview: suspend (Message) -> AttachmentDownload? = { null }
 ) {
     val isMine = message.isMine
@@ -88,18 +100,52 @@ fun MessageBubble(
     val textColor = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.TextPrimary
     val timeColor = if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.72f) else ColorTokens.TextSecondary
     val shape = if (isMine) ShapeTokens.BubbleMine else ShapeTokens.BubbleOthers
+    val haptic = LocalHapticFeedback.current
+    var dragOffset by remember(message.id) { mutableStateOf(0f) }
+    var swipeTriggered by remember(message.id) { mutableStateOf(false) }
+    val animatedOffset by animateFloatAsState(targetValue = dragOffset, label = "swipeReplyOffset")
+    val canAct = !message.id.startsWith("optimistic_")
 
     Row(
         modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-        horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start
+        horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start,
+        verticalAlignment = Alignment.CenterVertically
     ) {
+        if (!isMine && animatedOffset > 8f) ReplyHint(animatedOffset)
         Surface(
             modifier = Modifier
                 .widthIn(max = 352.dp)
+                .offset { IntOffset(animatedOffset.roundToInt(), 0) }
                 .animateContentSize()
+                .pointerInput(message.id) {
+                    detectHorizontalDragGestures(
+                        onDragEnd = {
+                            if (abs(dragOffset) > 82f && !swipeTriggered && canAct) {
+                                swipeTriggered = true
+                                haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                                onReply(message)
+                            }
+                            dragOffset = 0f
+                            swipeTriggered = false
+                        },
+                        onDragCancel = {
+                            dragOffset = 0f
+                            swipeTriggered = false
+                        },
+                        onHorizontalDrag = { change, amount ->
+                            val allowed = if (isMine) amount.coerceAtMost(0f) else amount.coerceAtLeast(0f)
+                            dragOffset = (dragOffset + allowed).coerceIn(-112f, 112f)
+                            if (abs(dragOffset) > 82f && !swipeTriggered && canAct) {
+                                swipeTriggered = true
+                                haptic.performHapticFeedback(HapticFeedbackType.TextHandleMove)
+                            }
+                            change.consume()
+                        }
+                    )
+                }
                 .combinedClickable(
-                    onClick = { if (!message.id.startsWith("optimistic_")) onReply(message) },
-                    onLongClick = { if (!message.id.startsWith("optimistic_")) onDelete(message) }
+                    onClick = {},
+                    onLongClick = { if (canAct) onLongPress(message) }
                 ),
             color = bubbleColor,
             shape = shape,
@@ -113,9 +159,9 @@ fun MessageBubble(
                 }
 
                 when (message.type) {
-                    "image" -> InlineImageContent(message, isMine, onLoadAttachmentPreview)
-                    "video" -> InlineVideoContent(message, isMine, onAttachmentClick, onLoadAttachmentPreview, circle = false)
-                    "video_note" -> InlineVideoContent(message, isMine, onAttachmentClick, onLoadAttachmentPreview, circle = true)
+                    "image" -> InlineImageContent(message, isMine, onLoadAttachmentPreview, onOpenMedia)
+                    "video" -> InlineVideoContent(message, isMine, onAttachmentClick, onLoadAttachmentPreview, onOpenMedia, circle = false)
+                    "video_note" -> InlineVideoContent(message, isMine, onAttachmentClick, onLoadAttachmentPreview, onOpenMedia, circle = true)
                     "voice" -> VoiceMessageContent(message, isMine, onLoadAttachmentPreview)
                     "file" -> AttachmentCardContent(message, isMine, onAttachmentClick)
                 }
@@ -136,6 +182,15 @@ fun MessageBubble(
                 }
             }
         }
+        if (isMine && animatedOffset < -8f) ReplyHint(-animatedOffset)
+    }
+}
+
+@Composable
+private fun ReplyHint(offset: Float) {
+    val alpha = (offset / 96f).coerceIn(0.15f, 1f)
+    Surface(shape = CircleShape, color = ColorTokens.Primary.copy(alpha = alpha * 0.16f)) {
+        Icon(Icons.Default.Reply, contentDescription = null, tint = ColorTokens.Primary.copy(alpha = alpha), modifier = Modifier.padding(7.dp).size(18.dp))
     }
 }
 
@@ -174,17 +229,19 @@ private fun ReplyPreview(message: Message, replyText: String, isMine: Boolean) {
 private fun InlineImageContent(
     message: Message,
     isMine: Boolean,
-    onLoadAttachmentPreview: suspend (Message) -> AttachmentDownload?
+    onLoadAttachmentPreview: suspend (Message) -> AttachmentDownload?,
+    onOpenMedia: (Message, MediaLoadState) -> Unit
 ) {
-    var bytes by remember(message.mediaPath) { mutableStateOf<ByteArray?>(null) }
-    var loading by remember(message.mediaPath) { mutableStateOf(true) }
+    val context = LocalContext.current
+    var state by remember(message.mediaPath) { mutableStateOf<MediaLoadState>(optimisticState(message)) }
     LaunchedEffect(message.mediaPath) {
-        loading = true
-        bytes = withContext(Dispatchers.IO) { runCatching { onLoadAttachmentPreview(message)?.bytes }.getOrNull() }
-        loading = false
+        if (!message.mediaPath.isNullOrBlank()) {
+            state = MediaLoadState.Loading()
+            state = MediaCacheManager.load(context, message) { msg -> onLoadAttachmentPreview(msg) ?: error("Media unavailable") }
+        }
     }
-
-    val bitmap = remember(bytes) { bytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) } }
+    val ready = state as? MediaLoadState.Ready
+    val bitmap = remember(ready?.file?.absolutePath) { ready?.file?.let { BitmapFactory.decodeFile(it.absolutePath) } }
     val ratio = bitmap?.let { (it.width.toFloat() / it.height.toFloat()).coerceIn(0.72f, 1.78f) } ?: 1.15f
     Box(
         modifier = Modifier
@@ -194,12 +251,14 @@ private fun InlineImageContent(
             .heightIn(min = 150.dp, max = 300.dp)
             .clip(ShapeTokens.Media)
             .background(if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.12f) else ColorTokens.AccentSoft)
-            .border(1.dp, if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.16f) else ColorTokens.BorderLight, ShapeTokens.Media),
+            .border(1.dp, if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.16f) else ColorTokens.BorderLight, ShapeTokens.Media)
+            .clickable { onOpenMedia(message, state) },
         contentAlignment = Alignment.Center
     ) {
         when {
             bitmap != null -> Image(bitmap = bitmap.asImageBitmap(), contentDescription = "Image", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            loading -> CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp, color = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.Primary)
+            state is MediaLoadState.Loading -> CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp, color = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.Primary)
+            state is MediaLoadState.Error -> Text((state as MediaLoadState.Error).message, style = TypographyTokens.LabelSmall, color = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.TextSecondary)
             else -> Text("Image unavailable", style = TypographyTokens.LabelSmall, color = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.TextSecondary)
         }
     }
@@ -211,26 +270,22 @@ private fun InlineVideoContent(
     isMine: Boolean,
     onAttachmentClick: (Message) -> Unit,
     onLoadAttachmentPreview: suspend (Message) -> AttachmentDownload?,
+    onOpenMedia: (Message, MediaLoadState) -> Unit,
     circle: Boolean
 ) {
     val context = LocalContext.current
-    var file by remember(message.mediaPath) { mutableStateOf<File?>(null) }
-    var loading by remember(message.mediaPath) { mutableStateOf(true) }
+    var state by remember(message.mediaPath) { mutableStateOf<MediaLoadState>(optimisticState(message)) }
     var playing by remember(message.mediaPath) { mutableStateOf(false) }
     var videoView by remember(message.mediaPath) { mutableStateOf<VideoView?>(null) }
 
     LaunchedEffect(message.mediaPath) {
-        loading = true
-        file = withContext(Dispatchers.IO) {
-            runCatching {
-                val attachment = onLoadAttachmentPreview(message) ?: return@runCatching null
-                writeCacheFile(context, attachment.fileName.ifBlank { if (circle) "video_note.mp4" else "video.mp4" }, attachment.bytes)
-            }.getOrNull()
+        if (!message.mediaPath.isNullOrBlank()) {
+            state = MediaLoadState.Loading()
+            state = MediaCacheManager.load(context, message) { msg -> onLoadAttachmentPreview(msg) ?: error("Media unavailable") }
         }
-        loading = false
     }
 
-    DisposableEffect(file?.absolutePath) {
+    DisposableEffect((state as? MediaLoadState.Ready)?.file?.absolutePath) {
         onDispose {
             runCatching { videoView?.stopPlayback() }
             videoView = null
@@ -240,51 +295,40 @@ private fun InlineVideoContent(
 
     val shape = if (circle) CircleShape else ShapeTokens.Media
     val modifier = if (circle) Modifier.size(206.dp) else Modifier.fillMaxWidth().widthIn(max = 340.dp).heightIn(min = 180.dp, max = 272.dp).aspectRatio(16f / 9f)
+    val ready = state as? MediaLoadState.Ready
 
     Box(
         modifier = modifier
             .clip(shape)
             .background(if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.12f) else ColorTokens.AccentSoft)
             .border(1.dp, if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.16f) else ColorTokens.BorderLight, shape)
-            .clickable {
-                val view = videoView
-                if (view == null) onAttachmentClick(message) else {
-                    if (playing) { view.pause(); playing = false } else { view.start(); playing = true }
-                }
-            },
+            .clickable { if (ready != null) onOpenMedia(message, state) else onAttachmentClick(message) },
         contentAlignment = Alignment.Center
     ) {
-        val readyFile = file
         when {
-            readyFile != null -> AndroidView(
+            ready != null -> AndroidView(
                 modifier = Modifier.fillMaxSize(),
                 factory = { ctx ->
                     VideoView(ctx).apply {
                         layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                        setVideoURI(Uri.fromFile(readyFile))
-                        setOnPreparedListener { mp ->
-                            mp.isLooping = false
-                            seekTo(1)
-                            playing = false
-                        }
+                        setVideoURI(Uri.fromFile(ready.file))
+                        setOnPreparedListener { mp -> mp.isLooping = false; seekTo(1); playing = false }
                         setOnCompletionListener { playing = false; seekTo(1) }
                         videoView = this
                     }
                 },
-                update = { view ->
-                    if (videoView !== view) videoView = view
-                }
+                update = { view -> if (videoView !== view) videoView = view }
             )
-            loading -> CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp, color = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.Primary)
-            else -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
+            state is MediaLoadState.Loading -> CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp, color = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.Primary)
+            state is MediaLoadState.Error -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
                 Icon(Icons.Default.Videocam, contentDescription = null, tint = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.TextSecondary)
-                Text("Video unavailable", style = TypographyTokens.LabelSmall, color = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.TextSecondary)
+                Text((state as MediaLoadState.Error).message, style = TypographyTokens.LabelSmall, color = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.TextSecondary)
             }
         }
 
-        if (readyFile != null) {
+        if (ready != null) {
             Surface(shape = CircleShape, color = ColorTokens.Background.copy(alpha = 0.62f)) {
-                Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = null, tint = ColorTokens.Primary, modifier = Modifier.padding(12.dp).size(30.dp))
+                Icon(Icons.Default.PlayArrow, contentDescription = null, tint = ColorTokens.Primary, modifier = Modifier.padding(12.dp).size(30.dp))
             }
         }
     }
@@ -309,19 +353,18 @@ private fun VoiceMessageContent(
     LaunchedEffect(message.mediaPath) {
         loading = true
         player = withContext(Dispatchers.IO) {
-            val attachment = runCatching { onLoadAttachmentPreview(message) }.getOrNull()
-            if (attachment != null) {
-                val cached = writeCacheFile(context, attachment.fileName.ifBlank { "voice.m4a" }, attachment.bytes)
-                MediaPlayer().apply {
-                    setDataSource(cached.absolutePath)
-                    prepare()
-                    setOnCompletionListener { completed ->
-                        playing = false
-                        progress = 0f
-                        completed.seekTo(0)
-                    }
+            if (message.mediaPath.isNullOrBlank()) return@withContext null
+            val state = MediaCacheManager.load(context, message) { msg -> onLoadAttachmentPreview(msg) ?: error("Voice unavailable") }
+            val ready = state as? MediaLoadState.Ready ?: return@withContext null
+            MediaPlayer().apply {
+                setDataSource(ready.file.absolutePath)
+                prepare()
+                setOnCompletionListener { completed ->
+                    playing = false
+                    progress = 0f
+                    completed.seekTo(0)
                 }
-            } else null
+            }
         }
         loading = false
     }
@@ -407,16 +450,13 @@ private fun AttachmentCardContent(message: Message, isMine: Boolean, onAttachmen
         }
         Column(modifier = Modifier.weight(1f)) {
             Text(title, style = TypographyTokens.BodyMedium, color = contentColor, maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(sizeText ?: "Open file", style = TypographyTokens.LabelSmall, color = secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(sizeText ?: if (message.deliveryStatus == "sending") "Uploading…" else "Open file", style = TypographyTokens.LabelSmall, color = secondary, maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
     }
 }
 
-private fun writeCacheFile(context: Context, fileName: String, bytes: ByteArray): File {
-    val safeName = fileName.replace(Regex("[^A-Za-z0-9А-Яа-я._-]"), "_").ifBlank { "media" }
-    val file = File(context.cacheDir, "preview_${System.currentTimeMillis()}_$safeName")
-    file.outputStream().use { it.write(bytes) }
-    return file
+private fun optimisticState(message: Message): MediaLoadState {
+    return if (message.mediaPath.isNullOrBlank() && message.deliveryStatus == "sending") MediaLoadState.Loading() else MediaLoadState.NotLoaded
 }
 
 private fun formatDuration(ms: Int?): String {
