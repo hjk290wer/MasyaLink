@@ -1,0 +1,38 @@
+name: Diagnostic Compile Log
+
+on:
+  push:
+    branches:
+      - ui/near-release-pink-messenger
+
+jobs:
+  compile-log:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Make Gradle executable
+        run: chmod +x ./gradlew
+
+      - name: Capture compile log
+        shell: bash
+        run: |
+          set +e
+          ./gradlew :app:compileDebugKotlin --console=plain --stacktrace > compile-log.txt 2>&1
+          status=$?
+          tail -n 80 compile-log.txt
+          exit $status
+
+      - name: Upload compile log
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: compile-log
+          path: compile-log.txt
