@@ -83,6 +83,20 @@ dependencies {
     // DataStore Preferences
     implementation("androidx.datastore:datastore-preferences:1.1.1")
 
+    // Media3 / ExoPlayer for fullscreen video UX
+    val media3Version = "1.3.1"
+    implementation("androidx.media3:media3-common:$media3Version")
+    implementation("androidx.media3:media3-exoplayer:$media3Version")
+    implementation("androidx.media3:media3-ui:$media3Version")
+
+    // CameraX for internal circular video-note recording
+    val cameraXVersion = "1.3.3"
+    implementation("androidx.camera:camera-core:$cameraXVersion")
+    implementation("androidx.camera:camera-camera2:$cameraXVersion")
+    implementation("androidx.camera:camera-lifecycle:$cameraXVersion")
+    implementation("androidx.camera:camera-video:$cameraXVersion")
+    implementation("androidx.camera:camera-view:$cameraXVersion")
+
     // Tooling
     debugImplementation("androidx.compose.ui:ui-tooling")
 }
