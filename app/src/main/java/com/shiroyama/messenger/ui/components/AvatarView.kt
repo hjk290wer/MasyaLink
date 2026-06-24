@@ -5,6 +5,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material3.Text
@@ -36,11 +37,7 @@ fun AvatarView(
         modifier = modifier
             .size(size)
             .clip(CircleShape)
-            .background(
-                Brush.linearGradient(
-                    listOf(ColorTokens.PrimaryLight, ColorTokens.Primary, ColorTokens.PrimaryDark)
-                )
-            )
+            .background(Brush.linearGradient(listOf(ColorTokens.PrimaryLight, ColorTokens.Primary, ColorTokens.PrimaryDark)))
             .then(if (showBorder) Modifier.border(1.dp, ColorTokens.TextOnPrimary.copy(alpha = 0.38f), CircleShape) else Modifier),
         contentAlignment = Alignment.Center
     ) {
