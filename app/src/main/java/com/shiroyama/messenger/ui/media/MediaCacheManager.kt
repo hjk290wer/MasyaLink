@@ -6,19 +6,23 @@ import com.shiroyama.messenger.ui.screens.chat.AttachmentDownload
 import java.io.File
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
+import kotlinx.coroutines.Deferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.withContext
 
 object MediaCacheManager {
     private val memory = ConcurrentHashMap<String, MediaLoadState.Ready>()
+    private val inFlight = ConcurrentHashMap<String, Deferred<MediaLoadState>>()
 
     suspend fun load(
         context: Context,
         message: Message,
         loader: suspend (Message) -> AttachmentDownload
-    ): MediaLoadState = withContext(Dispatchers.IO) {
-        val path = message.mediaPath ?: return@withContext MediaLoadState.Error("Attachment path is empty")
-        memory[path]?.let { return@withContext it }
+    ): MediaLoadState = coroutineScope {
+        val path = message.mediaPath ?: return@coroutineScope MediaLoadState.Error("Attachment path is empty")
+        memory[path]?.let { return@coroutineScope it }
 
         val fileName = message.mediaOriginalName ?: path.substringAfterLast('/').ifBlank { "media" }
         val mimeType = message.mediaMime ?: "application/octet-stream"
@@ -26,10 +30,40 @@ object MediaCacheManager {
         if (file.exists() && file.length() > 0) {
             val ready = MediaLoadState.Ready(file, fileName, mimeType, file.length())
             memory[path] = ready
-            return@withContext ready
+            return@coroutineScope ready
         }
 
-        return@withContext try {
+        val newLoad = async(Dispatchers.IO) { loadFromNetwork(context, message, path, fileName, mimeType, file, loader) }
+        val existing = inFlight.putIfAbsent(path, newLoad)
+        val active = existing ?: newLoad
+        try {
+            active.await()
+        } finally {
+            if (existing == null) inFlight.remove(path)
+        }
+    }
+
+    fun getCached(message: Message): MediaLoadState.Ready? {
+        val path = message.mediaPath ?: return null
+        return memory[path]
+    }
+
+    private suspend fun loadFromNetwork(
+        context: Context,
+        message: Message,
+        path: String,
+        fileName: String,
+        mimeType: String,
+        file: File,
+        loader: suspend (Message) -> AttachmentDownload
+    ): MediaLoadState = withContext(Dispatchers.IO) {
+        memory[path]?.let { return@withContext it }
+        if (file.exists() && file.length() > 0) {
+            val ready = MediaLoadState.Ready(file, fileName, mimeType, file.length())
+            memory[path] = ready
+            return@withContext ready
+        }
+        try {
             val attachment = loader(message)
             file.parentFile?.mkdirs()
             file.outputStream().use { it.write(attachment.bytes) }
@@ -44,11 +78,6 @@ object MediaCacheManager {
         } catch (e: Exception) {
             MediaLoadState.Error(classifyMediaError(e))
         }
-    }
-
-    fun getCached(message: Message): MediaLoadState.Ready? {
-        val path = message.mediaPath ?: return null
-        return memory[path]
     }
 
     private fun cacheFile(context: Context, mediaPath: String, fileName: String): File {
