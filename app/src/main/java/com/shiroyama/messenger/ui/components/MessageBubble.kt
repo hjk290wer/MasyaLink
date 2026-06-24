@@ -1,10 +1,8 @@
 package com.shiroyama.messenger.ui.components
 
 import android.graphics.BitmapFactory
+import android.media.MediaMetadataRetriever
 import android.media.MediaPlayer
-import android.net.Uri
-import android.view.ViewGroup
-import android.widget.VideoView
 import androidx.compose.animation.animateContentSize
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -34,7 +32,9 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Done
 import androidx.compose.material.icons.filled.DoneAll
@@ -49,6 +49,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.IconButtonDefaults
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -66,10 +67,10 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.viewinterop.AndroidView
 import com.shiroyama.messenger.domain.model.Message
 import com.shiroyama.messenger.ui.media.MediaCacheManager
 import com.shiroyama.messenger.ui.media.MediaLoadState
@@ -120,7 +121,7 @@ fun MessageBubble(
                 .pointerInput(message.id) {
                     detectHorizontalDragGestures(
                         onDragEnd = {
-                            if (abs(dragOffset) > 82f && !swipeTriggered && canAct) {
+                            if (abs(dragOffset) > 58f && !swipeTriggered && canAct) {
                                 swipeTriggered = true
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                                 onReply(message)
@@ -128,14 +129,11 @@ fun MessageBubble(
                             dragOffset = 0f
                             swipeTriggered = false
                         },
-                        onDragCancel = {
-                            dragOffset = 0f
-                            swipeTriggered = false
-                        },
+                        onDragCancel = { dragOffset = 0f; swipeTriggered = false },
                         onHorizontalDrag = { change, amount ->
                             val allowed = if (isMine) amount.coerceAtMost(0f) else amount.coerceAtLeast(0f)
-                            dragOffset = (dragOffset + allowed).coerceIn(-112f, 112f)
-                            if (abs(dragOffset) > 82f && !swipeTriggered && canAct) {
+                            dragOffset = (dragOffset + allowed).coerceIn(-92f, 92f)
+                            if (abs(dragOffset) > 58f && !swipeTriggered && canAct) {
                                 swipeTriggered = true
                                 haptic.performHapticFeedback(HapticFeedbackType.LongPress)
                             }
@@ -143,10 +141,7 @@ fun MessageBubble(
                         }
                     )
                 }
-                .combinedClickable(
-                    onClick = {},
-                    onLongClick = { if (canAct) onLongPress(message) }
-                ),
+                .combinedClickable(onClick = {}, onLongClick = { if (canAct) onLongPress(message) }),
             color = bubbleColor,
             shape = shape,
             tonalElevation = if (isMine) 2.dp else 4.dp,
@@ -168,15 +163,11 @@ fun MessageBubble(
 
                 if (message.text.isNotBlank()) {
                     if (message.type != "text") Spacer(modifier = Modifier.height(SpacingTokens.Tiny))
-                    Text(text = message.text, style = TypographyTokens.BodyMedium, color = textColor)
+                    ExpandableMessageText(message.text, textColor)
                 }
 
                 Spacer(modifier = Modifier.height(2.dp))
-                Row(
-                    modifier = Modifier.align(Alignment.End),
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(3.dp)
-                ) {
+                Row(modifier = Modifier.align(Alignment.End), verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(3.dp)) {
                     Text(message.formattedTime, style = TypographyTokens.LabelSmall, color = timeColor)
                     if (isMine) AnimatedDeliveryStatus(status = message.deliveryStatus, color = timeColor)
                 }
@@ -187,8 +178,29 @@ fun MessageBubble(
 }
 
 @Composable
+private fun ExpandableMessageText(text: String, color: androidx.compose.ui.graphics.Color) {
+    val isLong = text.length > 700 || text.count { it == '\n' } > 8
+    val isTechnical = text.contains("Exception") || text.contains("Stack trace") || text.contains("at ") && text.contains("java")
+    var expanded by remember(text) { mutableStateOf(false) }
+    val style = if (isTechnical) TypographyTokens.LabelSmall.copy(fontFamily = FontFamily.Monospace) else TypographyTokens.BodyMedium
+    Column {
+        if (isLong && !expanded) {
+            Text(text = text, style = style, color = color, maxLines = 8, overflow = TextOverflow.Ellipsis)
+            TextButton(onClick = { expanded = true }, modifier = Modifier.align(Alignment.End)) { Text("Show more") }
+        } else if (isLong) {
+            Box(modifier = Modifier.heightIn(max = 280.dp).verticalScroll(rememberScrollState())) {
+                Text(text = text, style = style, color = color)
+            }
+            TextButton(onClick = { expanded = false }, modifier = Modifier.align(Alignment.End)) { Text("Show less") }
+        } else {
+            Text(text = text, style = style, color = color)
+        }
+    }
+}
+
+@Composable
 private fun ReplyHint(offset: Float) {
-    val alpha = (offset / 96f).coerceIn(0.15f, 1f)
+    val alpha = (offset / 76f).coerceIn(0.15f, 1f)
     Surface(shape = CircleShape, color = ColorTokens.Primary.copy(alpha = alpha * 0.16f)) {
         Icon(Icons.Default.Reply, contentDescription = null, tint = ColorTokens.Primary.copy(alpha = alpha), modifier = Modifier.padding(7.dp).size(18.dp))
     }
@@ -196,14 +208,7 @@ private fun ReplyHint(offset: Float) {
 
 @Composable
 private fun ReplyPreview(message: Message, replyText: String, isMine: Boolean) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(ShapeTokens.Button)
-            .background(if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.15f) else ColorTokens.AccentSoft)
-            .border(1.dp, if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.18f) else ColorTokens.PrimaryLight.copy(alpha = 0.75f), ShapeTokens.Button)
-            .padding(8.dp)
-    ) {
+    Row(modifier = Modifier.fillMaxWidth().clip(ShapeTokens.Button).background(if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.15f) else ColorTokens.AccentSoft).border(1.dp, if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.18f) else ColorTokens.PrimaryLight.copy(alpha = 0.75f), ShapeTokens.Button).padding(8.dp)) {
         Box(modifier = Modifier.width(3.dp).height(34.dp).background(if (isMine) ColorTokens.TextOnOutbound else ColorTokens.Primary, CircleShape))
         Spacer(Modifier.width(8.dp))
         Column(modifier = Modifier.weight(1f)) {
@@ -216,33 +221,22 @@ private fun ReplyPreview(message: Message, replyText: String, isMine: Boolean) {
 @Composable
 private fun InlineImageContent(message: Message, isMine: Boolean, onLoadAttachmentPreview: suspend (Message) -> AttachmentDownload?, onOpenMedia: (Message, MediaLoadState) -> Unit) {
     val context = LocalContext.current
-    var state by remember(message.mediaPath) { mutableStateOf<MediaLoadState>(optimisticState(message)) }
+    var state by remember(message.mediaPath) { mutableStateOf<MediaLoadState>(MediaCacheManager.getCached(message) ?: optimisticState(message)) }
     LaunchedEffect(message.mediaPath) {
-        if (!message.mediaPath.isNullOrBlank()) {
+        if (!message.mediaPath.isNullOrBlank() && state !is MediaLoadState.Ready) {
             state = MediaLoadState.Loading()
             state = MediaCacheManager.load(context, message) { msg -> onLoadAttachmentPreview(msg) ?: error("Media unavailable") }
         }
     }
     val ready = state as? MediaLoadState.Ready
     val bitmap = remember(ready?.file?.absolutePath) { ready?.file?.let { BitmapFactory.decodeFile(it.absolutePath) } }
-    val ratio = bitmap?.let { (it.width.toFloat() / it.height.toFloat()).coerceIn(0.72f, 1.78f) } ?: 1.15f
-    Box(
-        modifier = Modifier
-            .widthIn(max = 320.dp)
-            .fillMaxWidth()
-            .aspectRatio(ratio)
-            .heightIn(min = 150.dp, max = 300.dp)
-            .clip(ShapeTokens.Media)
-            .background(if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.12f) else ColorTokens.AccentSoft)
-            .border(1.dp, if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.16f) else ColorTokens.BorderLight, ShapeTokens.Media)
-            .clickable { onOpenMedia(message, state) },
-        contentAlignment = Alignment.Center
-    ) {
+    val ratio = bitmap?.let { (it.width.toFloat() / it.height.toFloat()).coerceIn(0.72f, 1.78f) } ?: 1.05f
+    Box(modifier = Modifier.widthIn(max = 310.dp).fillMaxWidth().aspectRatio(ratio).heightIn(min = 126.dp, max = 260.dp).clip(ShapeTokens.Media).background(if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.10f) else ColorTokens.AccentSoft.copy(alpha = 0.72f)).border(1.dp, if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.16f) else ColorTokens.BorderLight, ShapeTokens.Media).clickable { onOpenMedia(message, state) }, contentAlignment = Alignment.Center) {
         when {
             bitmap != null -> Image(bitmap = bitmap.asImageBitmap(), contentDescription = "Image", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-            state is MediaLoadState.Loading -> CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp, color = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.Primary)
-            state is MediaLoadState.Error -> Text((state as MediaLoadState.Error).message, style = TypographyTokens.LabelSmall, color = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.TextSecondary)
-            else -> Text("Image unavailable", style = TypographyTokens.LabelSmall, color = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.TextSecondary)
+            state is MediaLoadState.Loading -> CompactMediaLoading(isMine)
+            state is MediaLoadState.Error -> MediaErrorText((state as MediaLoadState.Error).message, isMine)
+            else -> Text("Tap to load", style = TypographyTokens.LabelSmall, color = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.TextSecondary)
         }
     }
 }
@@ -250,59 +244,42 @@ private fun InlineImageContent(message: Message, isMine: Boolean, onLoadAttachme
 @Composable
 private fun InlineVideoContent(message: Message, isMine: Boolean, onAttachmentClick: (Message) -> Unit, onLoadAttachmentPreview: suspend (Message) -> AttachmentDownload?, onOpenMedia: (Message, MediaLoadState) -> Unit, circle: Boolean) {
     val context = LocalContext.current
-    var state by remember(message.mediaPath) { mutableStateOf<MediaLoadState>(optimisticState(message)) }
-    var playing by remember(message.mediaPath) { mutableStateOf(false) }
-    var videoView by remember(message.mediaPath) { mutableStateOf<VideoView?>(null) }
-
+    var state by remember(message.mediaPath) { mutableStateOf<MediaLoadState>(MediaCacheManager.getCached(message) ?: optimisticState(message)) }
     LaunchedEffect(message.mediaPath) {
-        if (!message.mediaPath.isNullOrBlank()) {
+        if (!message.mediaPath.isNullOrBlank() && state !is MediaLoadState.Ready) {
             state = MediaLoadState.Loading()
             state = MediaCacheManager.load(context, message) { msg -> onLoadAttachmentPreview(msg) ?: error("Media unavailable") }
         }
     }
 
-    DisposableEffect((state as? MediaLoadState.Ready)?.file?.absolutePath) {
-        onDispose {
-            runCatching { videoView?.stopPlayback() }
-            videoView = null
-            playing = false
-        }
-    }
-
     val shape = if (circle) CircleShape else ShapeTokens.Media
-    val modifier = if (circle) Modifier.size(206.dp) else Modifier.fillMaxWidth().widthIn(max = 340.dp).heightIn(min = 180.dp, max = 272.dp).aspectRatio(16f / 9f)
+    val modifier = if (circle) Modifier.size(190.dp) else Modifier.fillMaxWidth().widthIn(max = 320.dp).heightIn(min = 150.dp, max = 250.dp).aspectRatio(16f / 9f)
     val ready = state as? MediaLoadState.Ready
+    val frame = remember(ready?.file?.absolutePath) { ready?.file?.let { extractVideoFrame(it.absolutePath) } }
 
-    Box(
-        modifier = modifier
-            .clip(shape)
-            .background(if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.12f) else ColorTokens.AccentSoft)
-            .border(1.dp, if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.16f) else ColorTokens.BorderLight, shape)
-            .clickable { if (ready != null) onOpenMedia(message, state) else onAttachmentClick(message) },
-        contentAlignment = Alignment.Center
-    ) {
+    Box(modifier = modifier.clip(shape).background(if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.10f) else ColorTokens.AccentSoft.copy(alpha = 0.72f)).border(1.dp, if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.16f) else ColorTokens.BorderLight, shape).clickable { if (ready != null) onOpenMedia(message, state) else onAttachmentClick(message) }, contentAlignment = Alignment.Center) {
         when {
-            ready != null -> AndroidView(
-                modifier = Modifier.fillMaxSize(),
-                factory = { ctx ->
-                    VideoView(ctx).apply {
-                        layoutParams = ViewGroup.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                        setVideoURI(Uri.fromFile(ready.file))
-                        setOnPreparedListener { mp -> mp.isLooping = false; seekTo(1); playing = false }
-                        setOnCompletionListener { playing = false; seekTo(1) }
-                        videoView = this
-                    }
-                },
-                update = { view -> if (videoView !== view) videoView = view }
-            )
-            state is MediaLoadState.Loading -> CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp, color = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.Primary)
-            state is MediaLoadState.Error -> Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(Icons.Default.Videocam, contentDescription = null, tint = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.TextSecondary)
-                Text((state as MediaLoadState.Error).message, style = TypographyTokens.LabelSmall, color = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.TextSecondary)
-            }
+            frame != null -> Image(bitmap = frame.asImageBitmap(), contentDescription = "Video", modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
+            ready != null -> Icon(Icons.Default.Videocam, contentDescription = null, tint = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.Primary, modifier = Modifier.size(38.dp))
+            state is MediaLoadState.Loading -> CompactMediaLoading(isMine)
+            state is MediaLoadState.Error -> MediaErrorText((state as MediaLoadState.Error).message, isMine)
+            else -> Icon(Icons.Default.Videocam, contentDescription = null, tint = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.TextSecondary, modifier = Modifier.size(34.dp))
         }
-        if (ready != null) Surface(shape = CircleShape, color = ColorTokens.Background.copy(alpha = 0.62f)) { Icon(Icons.Default.PlayArrow, contentDescription = null, tint = ColorTokens.Primary, modifier = Modifier.padding(12.dp).size(30.dp)) }
+        if (ready != null) Surface(shape = CircleShape, color = ColorTokens.Background.copy(alpha = 0.70f)) { Icon(Icons.Default.PlayArrow, contentDescription = null, tint = ColorTokens.Primary, modifier = Modifier.padding(12.dp).size(if (circle) 26.dp else 32.dp)) }
     }
+}
+
+@Composable
+private fun CompactMediaLoading(isMine: Boolean) {
+    Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.dp, color = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.Primary)
+        Text("Loading…", style = TypographyTokens.LabelSmall, color = if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.80f) else ColorTokens.TextSecondary)
+    }
+}
+
+@Composable
+private fun MediaErrorText(message: String, isMine: Boolean) {
+    Text(message, style = TypographyTokens.LabelSmall, color = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.TextSecondary, maxLines = 3, overflow = TextOverflow.Ellipsis, modifier = Modifier.padding(12.dp))
 }
 
 @Composable
@@ -312,9 +289,7 @@ private fun VoiceMessageContent(message: Message, isMine: Boolean, onLoadAttachm
     var playing by remember(message.mediaPath) { mutableStateOf(false) }
     var progress by remember(message.mediaPath) { mutableStateOf(0f) }
     var player by remember(message.mediaPath) { mutableStateOf<MediaPlayer?>(null) }
-
     DisposableEffect(message.mediaPath) { onDispose { player?.release(); player = null } }
-
     LaunchedEffect(message.mediaPath) {
         loading = true
         player = withContext(Dispatchers.IO) {
@@ -329,7 +304,6 @@ private fun VoiceMessageContent(message: Message, isMine: Boolean, onLoadAttachm
         }
         loading = false
     }
-
     LaunchedEffect(playing) {
         while (playing) {
             val mp = player
@@ -337,11 +311,10 @@ private fun VoiceMessageContent(message: Message, isMine: Boolean, onLoadAttachm
             delay(90)
         }
     }
-
     Row(modifier = Modifier.widthIn(min = 230.dp, max = 310.dp).clip(ShapeTokens.Input).background(if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.14f) else ColorTokens.AccentSoft).border(1.dp, if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.12f) else ColorTokens.BorderLight.copy(alpha = 0.55f), ShapeTokens.Input).padding(horizontal = 8.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = { val mp = player ?: return@IconButton; if (mp.isPlaying) { mp.pause(); playing = false } else { mp.start(); playing = true } }, enabled = !loading && player != null, colors = IconButtonDefaults.iconButtonColors(containerColor = if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.12f) else ColorTokens.Primary.copy(alpha = 0.12f), contentColor = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.Primary)) { Icon(if (playing) Icons.Default.Pause else Icons.Default.PlayArrow, contentDescription = "Play voice") }
         Column(modifier = Modifier.weight(1f)) {
-            Waveform(playing = playing, progress = progress, isMine = isMine)
+            Waveform(progress = progress, isMine = isMine)
             Text(formatDuration(message.mediaDurationMs), style = TypographyTokens.LabelSmall, color = if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.72f) else ColorTokens.TextSecondary)
         }
         if (loading) CircularProgressIndicator(modifier = Modifier.size(18.dp), strokeWidth = 2.dp, color = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.Primary)
@@ -349,14 +322,11 @@ private fun VoiceMessageContent(message: Message, isMine: Boolean, onLoadAttachm
 }
 
 @Composable
-private fun Waveform(playing: Boolean, progress: Float, isMine: Boolean) {
-    val transition = rememberInfiniteTransition(label = "playWave")
-    val animated by transition.animateFloat(0.35f, 1f, infiniteRepeatable(tween(520), RepeatMode.Reverse), label = "voiceWave")
+private fun Waveform(progress: Float, isMine: Boolean) {
     Row(modifier = Modifier.fillMaxWidth().height(28.dp), verticalAlignment = Alignment.CenterVertically) {
-        (0 until 28).forEach { i ->
-            val base = ((i * 37) % 16 + 7).dp
-            val isPassed = i / 28f <= progress
-            val height = if (playing) base * animated.coerceIn(0.45f, 1f) else base
+        (0 until 30).forEach { i ->
+            val height = (((i * 37) % 16) + 7).dp
+            val isPassed = i / 30f <= progress
             Box(modifier = Modifier.padding(horizontal = 1.dp).width(3.dp).height(height).background(if (isPassed) (if (isMine) ColorTokens.TextOnOutbound else ColorTokens.Primary) else (if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.35f) else ColorTokens.PrimaryLight), ShapeTokens.Button))
         }
     }
@@ -376,6 +346,14 @@ private fun AttachmentCardContent(message: Message, isMine: Boolean, onAttachmen
         }
     }
 }
+
+private fun extractVideoFrame(path: String): android.graphics.Bitmap? = runCatching {
+    val retriever = MediaMetadataRetriever()
+    retriever.setDataSource(path)
+    val bitmap = retriever.getFrameAtTime(0, MediaMetadataRetriever.OPTION_CLOSEST_SYNC)
+    retriever.release()
+    bitmap
+}.getOrNull()
 
 private fun optimisticState(message: Message): MediaLoadState = if (message.mediaPath.isNullOrBlank() && message.deliveryStatus == "sending") MediaLoadState.Loading() else MediaLoadState.NotLoaded
 
