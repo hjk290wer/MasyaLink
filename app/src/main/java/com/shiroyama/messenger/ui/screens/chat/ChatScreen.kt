@@ -12,7 +12,6 @@ import android.provider.OpenableColumns
 import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
-import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
 import androidx.compose.animation.core.infiniteRepeatable
@@ -37,14 +36,12 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.AttachFile
 import androidx.compose.material.icons.filled.Close
-import androidx.compose.material.icons.filled.Delete
-import androidx.compose.material.icons.filled.InsertDriveFile
 import androidx.compose.material.icons.filled.Photo
 import androidx.compose.material.icons.filled.Settings
 import androidx.compose.material.icons.filled.Videocam
@@ -70,7 +67,6 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.scale
-import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.style.TextAlign
@@ -82,7 +78,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.shiroyama.messenger.core.storage.LocalSessionStorage
 import com.shiroyama.messenger.domain.model.Message
 import com.shiroyama.messenger.ui.components.AvatarView
+import com.shiroyama.messenger.ui.components.ChatBackground
 import com.shiroyama.messenger.ui.components.ChatInputBar
+import com.shiroyama.messenger.ui.components.DateSeparator
 import com.shiroyama.messenger.ui.components.MessageBubble
 import com.shiroyama.messenger.ui.components.StatusDot
 import com.shiroyama.messenger.ui.theme.ColorTokens
@@ -90,6 +88,7 @@ import com.shiroyama.messenger.ui.theme.ShapeTokens
 import com.shiroyama.messenger.ui.theme.SpacingTokens
 import com.shiroyama.messenger.ui.theme.TypographyTokens
 import java.io.File
+import java.time.LocalDate
 
 private data class PickedAttachment(val fileName: String, val mimeType: String, val bytes: ByteArray)
 private data class ActiveRecording(val recorder: MediaRecorder, val file: File, val startedAt: Long)
@@ -152,6 +151,15 @@ fun ChatScreen(
             e.printStackTrace()
             Toast.makeText(context, e.message ?: "Не удалось начать запись", Toast.LENGTH_LONG).show()
         }
+    }
+
+    fun cancelVoiceRecording() {
+        val recording = activeRecording ?: return
+        activeRecording = null
+        try { recording.recorder.stop() } catch (_: Exception) {}
+        try { recording.recorder.release() } catch (_: Exception) {}
+        recording.file.delete()
+        Toast.makeText(context, "Запись отменена", Toast.LENGTH_SHORT).show()
     }
 
     fun stopVoiceRecordingAndSend() {
@@ -267,7 +275,7 @@ fun ChatScreen(
         }
     }
 
-    pendingDeleteMessage?.let { msg ->
+    pendingDeleteMessage?.let {
         AlertDialog(
             onDismissRequest = { viewModel.cancelDeleteMessage() },
             containerColor = ColorTokens.SurfaceElevated,
@@ -295,8 +303,7 @@ fun ChatScreen(
                 onTypingChanged = { text -> viewModel.onInputTyping(text) },
                 onAttachClick = { showAttachMenu = true },
                 onVoiceClick = {
-                    if (activeRecording != null) stopVoiceRecordingAndSend()
-                    else if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) startVoiceRecording()
+                    if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) startVoiceRecording()
                     else audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO)
                 },
                 onVideoNoteClick = {
@@ -305,41 +312,46 @@ fun ChatScreen(
                 },
                 isRecordingVoice = activeRecording != null,
                 replyToMessage = replyTarget,
-                onCancelReply = { viewModel.clearReplyTarget() }
+                onCancelReply = { viewModel.clearReplyTarget() },
+                recordingStartedAtMs = activeRecording?.startedAt,
+                onCancelVoiceRecording = { cancelVoiceRecording() },
+                onSendVoiceRecording = { stopVoiceRecordingAndSend() }
             )
         }
     ) { innerPadding ->
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .background(Brush.verticalGradient(listOf(ColorTokens.GradientStart, ColorTokens.Background, ColorTokens.BackgroundAlt)))
-                .padding(innerPadding)
-        ) {
-            if (messages.isEmpty()) {
-                EmptyChatState(modifier = Modifier.align(Alignment.Center))
-            } else {
-                LazyColumn(
-                    state = listState,
-                    modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
-                    verticalArrangement = Arrangement.Top
-                ) {
-                    item { Spacer(modifier = Modifier.height(SpacingTokens.Small)) }
-                    items(messages, key = { it.id }) { msg ->
-                        MessageBubble(
-                            message = msg,
-                            onReply = { viewModel.startReplyToMessage(it) },
-                            onDelete = { viewModel.requestDeleteMessage(it) },
-                            onAttachmentClick = { message ->
-                                viewModel.downloadAttachment(message) { result ->
-                                    result.onSuccess { openDownloadedAttachment(context, it) }
-                                        .onFailure { error -> Toast.makeText(context, error.message ?: "Не удалось открыть файл", Toast.LENGTH_LONG).show() }
-                                }
-                            },
-                            onLoadAttachmentPreview = { message -> viewModel.downloadAttachmentDirect(message) }
-                        )
+        ChatBackground {
+            Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
+                if (messages.isEmpty()) {
+                    EmptyChatState(modifier = Modifier.align(Alignment.Center))
+                } else {
+                    LazyColumn(
+                        state = listState,
+                        modifier = Modifier.fillMaxSize().padding(horizontal = 10.dp),
+                        verticalArrangement = Arrangement.Top
+                    ) {
+                        item { Spacer(modifier = Modifier.height(SpacingTokens.Small)) }
+                        itemsIndexed(messages, key = { _, item -> item.id }) { index, msg ->
+                            val currentDate = dateLabel(msg.createdAt)
+                            val previousDate = messages.getOrNull(index - 1)?.let { dateLabel(it.createdAt) }
+                            if (currentDate != previousDate) {
+                                DateSeparator(currentDate)
+                            }
+                            MessageBubble(
+                                message = msg,
+                                onReply = { viewModel.startReplyToMessage(it) },
+                                onDelete = { viewModel.requestDeleteMessage(it) },
+                                onAttachmentClick = { message ->
+                                    viewModel.downloadAttachment(message) { result ->
+                                        result.onSuccess { openDownloadedAttachment(context, it) }
+                                            .onFailure { error -> Toast.makeText(context, error.message ?: "Не удалось открыть файл", Toast.LENGTH_LONG).show() }
+                                    }
+                                },
+                                onLoadAttachmentPreview = { message -> viewModel.downloadAttachmentDirect(message) }
+                            )
+                        }
+                        if (isPeerTyping) item { TypingBubble() }
+                        item { Spacer(modifier = Modifier.height(SpacingTokens.Small)) }
                     }
-                    if (isPeerTyping) item { TypingBubble() }
-                    item { Spacer(modifier = Modifier.height(SpacingTokens.Small)) }
                 }
             }
         }
@@ -359,7 +371,7 @@ private fun ChatTopBar(peerName: String, avatarBytes: ByteArray?, peerOnline: Bo
                 .padding(horizontal = 14.dp, vertical = 10.dp),
             verticalAlignment = Alignment.CenterVertically
         ) {
-            AvatarView(peerName, avatarBytes, size = 46.dp)
+            AvatarView(peerName, avatarBytes, size = 44.dp)
             Spacer(Modifier.width(12.dp))
             Column(modifier = Modifier.weight(1f).widthIn(max = 240.dp)) {
                 Text(peerName, style = TypographyTokens.TitleMedium, color = ColorTokens.TextPrimary, maxLines = 1, overflow = TextOverflow.Ellipsis)
@@ -377,7 +389,7 @@ private fun ChatTopBar(peerName: String, avatarBytes: ByteArray?, peerOnline: Bo
 private fun AnimatedTypingText() {
     val transition = rememberInfiniteTransition(label = "typingDots")
     val dot by transition.animateFloat(0f, 1f, infiniteRepeatable(tween(700), RepeatMode.Reverse), label = "typing")
-    Text("печатает${".".repeat((dot * 3).toInt().coerceIn(1, 3))}", style = TypographyTokens.LabelSmall, color = ColorTokens.Primary)
+    Text("typing${".".repeat((dot * 3).toInt().coerceIn(1, 3))}", style = TypographyTokens.LabelSmall, color = ColorTokens.Primary)
 }
 
 @Composable
@@ -418,7 +430,7 @@ private fun AttachmentSheet(
         AttachmentOption(Icons.Default.Photo, "Photo", "Send an inline image", onPickPhoto)
         AttachmentOption(Icons.Default.Videocam, "Video", "Send an inline video", onPickVideo)
         AttachmentOption(Icons.Default.AttachFile, "File", "Compact file card", onPickFile)
-        AttachmentOption(Icons.Default.Videocam, "Record video note", "Circular message preview", onRecordVideoNote)
+        AttachmentOption(Icons.Default.Videocam, "Video note", "Record a circular message", onRecordVideoNote)
         Divider(color = ColorTokens.BorderLight, modifier = Modifier.padding(vertical = 8.dp))
         AttachmentOption(Icons.Default.Close, "Cancel", "Close menu", onCancel)
         Spacer(Modifier.height(8.dp))
@@ -471,4 +483,14 @@ private fun openDownloadedAttachment(context: Context, attachment: AttachmentDow
     val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
     val intent = Intent(Intent.ACTION_VIEW).apply { setDataAndType(uri, attachment.mimeType); addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION) }
     try { context.startActivity(Intent.createChooser(intent, "Открыть вложение")) } catch (e: Exception) { Toast.makeText(context, "Нет приложения для открытия файла", Toast.LENGTH_LONG).show() }
+}
+
+private fun dateLabel(iso: String): String {
+    val raw = iso.substringBefore('T', missingDelimiterValue = "")
+    return when (raw) {
+        LocalDate.now().toString() -> "Today"
+        LocalDate.now().minusDays(1).toString() -> "Yesterday"
+        "" -> "Date"
+        else -> raw
+    }
 }
