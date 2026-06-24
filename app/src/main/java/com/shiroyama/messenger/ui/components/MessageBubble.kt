@@ -70,6 +70,9 @@ import com.shiroyama.messenger.ui.theme.ShapeTokens
 import com.shiroyama.messenger.ui.theme.SpacingTokens
 import com.shiroyama.messenger.ui.theme.TypographyTokens
 import java.io.File
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -177,7 +180,7 @@ private fun InlineImageContent(
     var loading by remember(message.mediaPath) { mutableStateOf(true) }
     LaunchedEffect(message.mediaPath) {
         loading = true
-        bytes = runCatching { onLoadAttachmentPreview(message)?.bytes }.getOrNull()
+        bytes = withContext(Dispatchers.IO) { runCatching { onLoadAttachmentPreview(message)?.bytes }.getOrNull() }
         loading = false
     }
 
@@ -218,17 +221,20 @@ private fun InlineVideoContent(
 
     LaunchedEffect(message.mediaPath) {
         loading = true
-        file = runCatching {
-            val attachment = onLoadAttachmentPreview(message) ?: return@runCatching null
-            writeCacheFile(context, attachment.fileName.ifBlank { if (circle) "video_note.mp4" else "video.mp4" }, attachment.bytes)
-        }.getOrNull()
+        file = withContext(Dispatchers.IO) {
+            runCatching {
+                val attachment = onLoadAttachmentPreview(message) ?: return@runCatching null
+                writeCacheFile(context, attachment.fileName.ifBlank { if (circle) "video_note.mp4" else "video.mp4" }, attachment.bytes)
+            }.getOrNull()
+        }
         loading = false
     }
 
-    DisposableEffect(file) {
+    DisposableEffect(file?.absolutePath) {
         onDispose {
             runCatching { videoView?.stopPlayback() }
             videoView = null
+            playing = false
         }
     }
 
@@ -241,9 +247,8 @@ private fun InlineVideoContent(
             .background(if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.12f) else ColorTokens.AccentSoft)
             .border(1.dp, if (isMine) ColorTokens.TextOnOutbound.copy(alpha = 0.16f) else ColorTokens.BorderLight, shape)
             .clickable {
-                val ready = file
                 val view = videoView
-                if (ready == null || view == null) onAttachmentClick(message) else {
+                if (view == null) onAttachmentClick(message) else {
                     if (playing) { view.pause(); playing = false } else { view.start(); playing = true }
                 }
             },
@@ -260,6 +265,7 @@ private fun InlineVideoContent(
                         setOnPreparedListener { mp ->
                             mp.isLooping = false
                             seekTo(1)
+                            playing = false
                         }
                         setOnCompletionListener { playing = false; seekTo(1) }
                         videoView = this
@@ -267,8 +273,6 @@ private fun InlineVideoContent(
                 },
                 update = { view ->
                     if (videoView !== view) videoView = view
-                    view.setVideoURI(Uri.fromFile(readyFile))
-                    view.seekTo(1)
                 }
             )
             loading -> CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp, color = if (isMine) ColorTokens.TextOnOutbound else ColorTokens.Primary)
@@ -304,18 +308,20 @@ private fun VoiceMessageContent(
 
     LaunchedEffect(message.mediaPath) {
         loading = true
-        val attachment = runCatching { onLoadAttachmentPreview(message) }.getOrNull()
-        if (attachment != null) {
-            val cached = writeCacheFile(context, attachment.fileName.ifBlank { "voice.m4a" }, attachment.bytes)
-            player = MediaPlayer().apply {
-                setDataSource(cached.absolutePath)
-                prepare()
-                setOnCompletionListener { completed ->
-                    playing = false
-                    progress = 0f
-                    completed.seekTo(0)
+        player = withContext(Dispatchers.IO) {
+            val attachment = runCatching { onLoadAttachmentPreview(message) }.getOrNull()
+            if (attachment != null) {
+                val cached = writeCacheFile(context, attachment.fileName.ifBlank { "voice.m4a" }, attachment.bytes)
+                MediaPlayer().apply {
+                    setDataSource(cached.absolutePath)
+                    prepare()
+                    setOnCompletionListener { completed ->
+                        playing = false
+                        progress = 0f
+                        completed.seekTo(0)
+                    }
                 }
-            }
+            } else null
         }
         loading = false
     }
@@ -324,7 +330,7 @@ private fun VoiceMessageContent(
         while (playing) {
             val mp = player
             if (mp != null && mp.duration > 0) progress = mp.currentPosition.toFloat() / mp.duration.toFloat()
-            kotlinx.coroutines.delay(90)
+            delay(90)
         }
     }
 
