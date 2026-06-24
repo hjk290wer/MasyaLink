@@ -2,6 +2,7 @@ package com.shiroyama.messenger.ui.components
 
 import androidx.compose.animation.AnimatedContent
 import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.ExperimentalAnimationApi
 import androidx.compose.animation.SizeTransform
 import androidx.compose.animation.core.RepeatMode
 import androidx.compose.animation.core.animateFloat
@@ -62,6 +63,7 @@ import com.shiroyama.messenger.ui.theme.ShapeTokens
 import com.shiroyama.messenger.ui.theme.SpacingTokens
 import com.shiroyama.messenger.ui.theme.TypographyTokens
 
+@OptIn(ExperimentalAnimationApi::class)
 @Composable
 fun ChatInputBar(
     onSendMessage: (String) -> Unit,
