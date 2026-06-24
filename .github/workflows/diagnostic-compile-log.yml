@@ -4,6 +4,10 @@ on:
   push:
     branches:
       - ui/near-release-pink-messenger
+  pull_request:
+    branches:
+      - main
+      - master
 
 jobs:
   compile-log:
