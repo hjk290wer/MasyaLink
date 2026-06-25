@@ -114,7 +114,15 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-private data class PickedAttachment(val fileName: String, val mimeType: String, val bytes: ByteArray)
+private const val MAX_ATTACHMENT_BYTES = 100L * 1024L * 1024L
+
+private data class PickedAttachment(
+    val fileName: String,
+    val mimeType: String,
+    val bytes: ByteArray,
+    val declaredSize: Long? = null,
+    val tooLarge: Boolean = false
+)
 private data class ActiveRecording(val recorder: MediaRecorder, val file: File, val startedAt: Long)
 private data class ViewerState(val message: Message, val media: MediaLoadState)
 
@@ -168,6 +176,12 @@ fun ChatScreen(
 
     fun showToast(text: String) { Toast.makeText(context, text, Toast.LENGTH_SHORT).show() }
 
+    fun hasVideoNotePermissions(): Boolean {
+        val camera = ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        val audio = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        return camera && audio
+    }
+
     fun copyMessage(message: Message) {
         val text = message.text.ifBlank { message.mediaOriginalName.orEmpty() }
         if (text.isBlank()) return
@@ -186,15 +200,14 @@ fun ChatScreen(
             val ready = state as? MediaLoadState.Ready
             if (ready == null) { showToast((state as? MediaLoadState.Error)?.message ?: "Media is not ready"); return@loadMedia }
             coroutineScope.launch {
-                MediaSaver.saveToPublicStorage(context, ready)
-                    .onSuccess { showToast("Saved") }
-                    .onFailure { showToast(it.message ?: "Save failed") }
+                MediaSaver.saveToPublicStorage(context, ready).onSuccess { showToast("Saved") }.onFailure { showToast(it.message ?: "Save failed") }
             }
         }
     }
 
     fun openMedia(message: Message, state: MediaLoadState) {
         if (message.type !in setOf("image", "video", "video_note", "file", "voice")) return
+        if (message.mediaPath.isNullOrBlank() && state !is MediaLoadState.Ready) return
         if (state is MediaLoadState.Ready) viewerState = ViewerState(message, state)
         else {
             viewerState = ViewerState(message, MediaLoadState.Loading())
@@ -205,16 +218,29 @@ fun ChatScreen(
     fun sendPicked(uri: Uri?) {
         if (uri == null) return
         coroutineScope.launch {
+            showToast("Preparing upload…")
             val picked = withContext(Dispatchers.IO) { readPickedAttachment(context, uri) }
-            if (picked == null) showToast("Не удалось прочитать файл")
-            else if (picked.bytes.size > 25L * 1024L * 1024L) showToast("Файл больше 25 MB")
-            else viewModel.sendAttachment(picked.fileName, picked.mimeType, picked.bytes)
+            when {
+                picked == null -> showToast("Не удалось прочитать файл")
+                picked.tooLarge || picked.bytes.size > MAX_ATTACHMENT_BYTES -> showToast("File is larger than 100 MB")
+                else -> viewModel.sendAttachment(picked.fileName, picked.mimeType, picked.bytes)
+            }
         }
     }
 
     val imagePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { sendPicked(it) }
     val videoPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { sendPicked(it) }
     val filePicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { sendPicked(it) }
+    val videoNotePermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestMultiplePermissions()) { grants ->
+        val camera = grants[Manifest.permission.CAMERA] == true || ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED
+        val audio = grants[Manifest.permission.RECORD_AUDIO] == true || ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+        if (camera && audio) showVideoNoteRecorder = true else showToast("Camera and microphone permissions are required")
+    }
+
+    fun requestOrOpenVideoNoteRecorder() {
+        if (hasVideoNotePermissions()) showVideoNoteRecorder = true
+        else videoNotePermissionLauncher.launch(arrayOf(Manifest.permission.CAMERA, Manifest.permission.RECORD_AUDIO))
+    }
 
     fun releaseRecording(recording: ActiveRecording, deleteFile: Boolean) {
         try { recording.recorder.stop() } catch (_: Exception) {}
@@ -236,9 +262,7 @@ fun ChatScreen(
             recorder.prepare()
             recorder.start()
             activeRecording = ActiveRecording(recorder, file, System.currentTimeMillis())
-        } catch (e: Exception) {
-            Toast.makeText(context, e.message ?: "Не удалось начать запись", Toast.LENGTH_LONG).show()
-        }
+        } catch (e: Exception) { Toast.makeText(context, e.message ?: "Не удалось начать запись", Toast.LENGTH_LONG).show() }
     }
 
     fun cancelVoiceRecording() {
@@ -258,9 +282,8 @@ fun ChatScreen(
                 val bytes = withContext(Dispatchers.IO) { recording.file.readBytes() }
                 if (durationMs < 500 || bytes.isEmpty()) { showToast("Голосовое слишком короткое"); recording.file.delete(); return@launch }
                 viewModel.sendAttachment(recording.file.name, "audio/mp4", bytes, forcedType = "voice", durationMs = durationMs)
-            } catch (e: Exception) {
-                Toast.makeText(context, e.message ?: "Не удалось отправить голосовое", Toast.LENGTH_LONG).show()
-            } finally { recording.file.delete() }
+            } catch (e: Exception) { Toast.makeText(context, e.message ?: "Не удалось отправить голосовое", Toast.LENGTH_LONG).show() }
+            finally { recording.file.delete() }
         }
     }
 
@@ -268,9 +291,6 @@ fun ChatScreen(
 
     val audioPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) startVoiceRecording() else Toast.makeText(context, "Нет доступа к микрофону", Toast.LENGTH_LONG).show()
-    }
-    val cameraPermissionLauncher = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
-        if (granted) showVideoNoteRecorder = true else Toast.makeText(context, "Нет доступа к камере", Toast.LENGTH_LONG).show()
     }
 
     LaunchedEffect(Unit) {
@@ -298,9 +318,13 @@ fun ChatScreen(
                 onRecorded = { file, duration ->
                     showVideoNoteRecorder = false
                     coroutineScope.launch {
-                        val bytes = withContext(Dispatchers.IO) { file.readBytes() }
-                        if (bytes.size > 25L * 1024L * 1024L) showToast("Кружок больше 25 MB")
-                        else viewModel.sendAttachment(file.name, "video/mp4", bytes, forcedType = "video_note", durationMs = duration ?: extractVideoDurationMs(file))
+                        val fileSize = withContext(Dispatchers.IO) { file.length() }
+                        if (fileSize > MAX_ATTACHMENT_BYTES) showToast("File is larger than 100 MB")
+                        else {
+                            val bytes = withContext(Dispatchers.IO) { file.readBytes() }
+                            if (bytes.size > MAX_ATTACHMENT_BYTES) showToast("File is larger than 100 MB")
+                            else viewModel.sendAttachment(file.name, "video/mp4", bytes, forcedType = "video_note", durationMs = duration ?: extractVideoDurationMs(file))
+                        }
                         file.delete()
                     }
                 }
@@ -314,7 +338,7 @@ fun ChatScreen(
                 onPickPhoto = { showAttachMenu = false; imagePicker.launch(arrayOf("image/*")) },
                 onPickVideo = { showAttachMenu = false; videoPicker.launch(arrayOf("video/*")) },
                 onPickFile = { showAttachMenu = false; filePicker.launch(arrayOf("*/*")) },
-                onRecordVideoNote = { showAttachMenu = false; if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) showVideoNoteRecorder = true else cameraPermissionLauncher.launch(Manifest.permission.CAMERA) },
+                onRecordVideoNote = { showAttachMenu = false; requestOrOpenVideoNoteRecorder() },
                 onCancel = { showAttachMenu = false }
             )
         }
@@ -326,7 +350,7 @@ fun ChatScreen(
 
     Box(modifier = Modifier.fillMaxSize()) {
         Scaffold(topBar = { ChatTopBar(peerName = peerName ?: peer?.displayName ?: "Чат", avatarBytes = peerAvatarBytes, peerOnline = peer?.isOnline == true, isTyping = isPeerTyping, onSettings = onNavigateToSettings) }, containerColor = ColorTokens.Background, bottomBar = {
-            ChatInputBar(onSendMessage = { text -> viewModel.sendMessage(text) }, onTypingChanged = { text -> viewModel.onInputTyping(text) }, onAttachClick = { showAttachMenu = true }, onVoiceClick = { if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) startVoiceRecording() else audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO) }, onVideoNoteClick = { if (ContextCompat.checkSelfPermission(context, Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) showVideoNoteRecorder = true else cameraPermissionLauncher.launch(Manifest.permission.CAMERA) }, isRecordingVoice = activeRecording != null, replyToMessage = replyTarget, onCancelReply = { viewModel.clearReplyTarget() }, recordingStartedAtMs = activeRecording?.startedAt, onCancelVoiceRecording = { cancelVoiceRecording() }, onSendVoiceRecording = { stopVoiceRecordingAndSend() })
+            ChatInputBar(onSendMessage = { text -> viewModel.sendMessage(text) }, onTypingChanged = { text -> viewModel.onInputTyping(text) }, onAttachClick = { showAttachMenu = true }, onVoiceClick = { if (ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED) startVoiceRecording() else audioPermissionLauncher.launch(Manifest.permission.RECORD_AUDIO) }, onVideoNoteClick = { requestOrOpenVideoNoteRecorder() }, isRecordingVoice = activeRecording != null, replyToMessage = replyTarget, onCancelReply = { viewModel.clearReplyTarget() }, recordingStartedAtMs = activeRecording?.startedAt, onCancelVoiceRecording = { cancelVoiceRecording() }, onSendVoiceRecording = { stopVoiceRecordingAndSend() })
         }) { innerPadding ->
             ChatBackground {
                 Box(modifier = Modifier.fillMaxSize().padding(innerPadding)) {
@@ -340,15 +364,7 @@ fun ChatScreen(
                                 val previousDate = messages.getOrNull(index - 1)?.let { dateLabel(it.createdAt) }
                                 if (currentDate != previousDate) DateSeparator(currentDate)
                                 Box(modifier = Modifier.onGloballyPositioned { messageBounds[msg.id] = it.boundsInRoot() }) {
-                                    MessageBubble(
-                                        message = msg,
-                                        onReply = { viewModel.startReplyToMessage(it) },
-                                        onDelete = { viewModel.requestDeleteMessage(it) },
-                                        onAttachmentClick = { message -> loadMedia(message) { state -> val ready = state as? MediaLoadState.Ready; if (ready != null && message.type in setOf("image", "video", "video_note", "voice")) viewerState = ViewerState(message, ready) else if (ready != null) openDownloadedAttachment(context, ready) else showToast((state as? MediaLoadState.Error)?.message ?: "Media unavailable") } },
-                                        onOpenMedia = { message, state -> openMedia(message, state) },
-                                        onLongPress = { message -> selectedMessage = SelectedMessageState(message, messageBounds[message.id] ?: Rect.Zero, message.isMine) },
-                                        onLoadAttachmentPreview = { message -> viewModel.downloadAttachmentDirect(message) }
-                                    )
+                                    MessageBubble(message = msg, onReply = { viewModel.startReplyToMessage(it) }, onDelete = { viewModel.requestDeleteMessage(it) }, onAttachmentClick = { message -> loadMedia(message) { state -> val ready = state as? MediaLoadState.Ready; if (ready != null && message.type in setOf("image", "video", "video_note", "voice")) viewerState = ViewerState(message, ready) else if (ready != null) openDownloadedAttachment(context, ready) else showToast((state as? MediaLoadState.Error)?.message ?: "Media unavailable") } }, onOpenMedia = { message, state -> openMedia(message, state) }, onLongPress = { message -> selectedMessage = SelectedMessageState(message, messageBounds[message.id] ?: Rect.Zero, message.isMine) }, onLoadAttachmentPreview = { message -> viewModel.downloadAttachmentDirect(message) })
                                 }
                             }
                             if (isPeerTyping) item { TypingBubble() }
@@ -359,7 +375,7 @@ fun ChatScreen(
             }
         }
 
-        MessageSelectionOverlay(selected = selectedMessage, onDismiss = { selectedMessage = null }, onReply = { selectedMessage = null; viewModel.startReplyToMessage(it) }, onCopy = { selectedMessage = null; copyMessage(it) }, onDownload = { saveMessageMedia(it) }, onDelete = { selectedMessage = null; viewModel.requestDeleteMessage(it) })
+        MessageSelectionOverlay(selected = selectedMessage, onDismiss = { selectedMessage = null }, onReply = { message -> selectedMessage = null; viewModel.startReplyToMessage(message) }, onCopy = { selectedMessage = null; copyMessage(it) }, onDownload = { saveMessageMedia(it) }, onDelete = { selectedMessage = null; viewModel.requestDeleteMessage(it) })
     }
 
     viewerState?.let { current ->
@@ -428,9 +444,18 @@ private fun readPickedAttachment(context: Context, uri: Uri): PickedAttachment? 
     val resolver = context.contentResolver
     val mime = resolver.getType(uri) ?: "application/octet-stream"
     var name = "attachment"
-    resolver.query(uri, null, null, null, null)?.use { cursor -> val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME); if (cursor.moveToFirst() && nameIndex >= 0) name = cursor.getString(nameIndex) ?: name }
+    var declaredSize: Long? = null
+    resolver.query(uri, null, null, null, null)?.use { cursor ->
+        val nameIndex = cursor.getColumnIndex(OpenableColumns.DISPLAY_NAME)
+        val sizeIndex = cursor.getColumnIndex(OpenableColumns.SIZE)
+        if (cursor.moveToFirst()) {
+            if (nameIndex >= 0) name = cursor.getString(nameIndex) ?: name
+            if (sizeIndex >= 0 && !cursor.isNull(sizeIndex)) declaredSize = cursor.getLong(sizeIndex)
+        }
+    }
+    if ((declaredSize ?: 0L) > MAX_ATTACHMENT_BYTES) return PickedAttachment(name, mime, ByteArray(0), declaredSize, tooLarge = true)
     val bytes = resolver.openInputStream(uri)?.use { it.readBytes() } ?: return null
-    return PickedAttachment(fileName = name, mimeType = mime, bytes = bytes)
+    return PickedAttachment(fileName = name, mimeType = mime, bytes = bytes, declaredSize = declaredSize, tooLarge = bytes.size > MAX_ATTACHMENT_BYTES)
 }
 
 private fun extractVideoDurationMs(file: File): Int? = runCatching { val retriever = MediaMetadataRetriever(); retriever.setDataSource(file.absolutePath); val duration = retriever.extractMetadata(MediaMetadataRetriever.METADATA_KEY_DURATION)?.toIntOrNull(); retriever.release(); duration }.getOrNull()
