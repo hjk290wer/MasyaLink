@@ -1,7 +1,12 @@
 package com.shiroyama.messenger.ui.media
 
+import android.Manifest
 import android.content.Context
-import android.net.Uri
+import android.content.pm.PackageManager
+import android.graphics.Outline
+import android.util.Log
+import android.view.View
+import android.view.ViewOutlineProvider
 import androidx.camera.core.CameraSelector
 import androidx.camera.core.Preview
 import androidx.camera.lifecycle.ProcessCameraProvider
@@ -27,6 +32,7 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FiberManualRecord
 import androidx.compose.material.icons.filled.Send
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -49,10 +55,14 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.core.content.ContextCompat
 import com.shiroyama.messenger.ui.theme.ColorTokens
-import com.shiroyama.messenger.ui.theme.ShapeTokens
 import com.shiroyama.messenger.ui.theme.TypographyTokens
 import java.io.File
 import kotlinx.coroutines.delay
+
+private const val TAG = "VideoNoteRecorder"
+private const val MAX_VIDEO_NOTE_MS = 60_000L
+
+private enum class RecorderState { Idle, Recording, Finalizing, Error }
 
 @Composable
 fun VideoNoteRecorderDialog(
@@ -64,21 +74,34 @@ fun VideoNoteRecorderDialog(
     val outputFile = remember { File(context.cacheDir, "circle_${System.currentTimeMillis()}.mp4") }
     var videoCapture by remember { mutableStateOf<VideoCapture<Recorder>?>(null) }
     var recording by remember { mutableStateOf<Recording?>(null) }
+    var recorderState by remember { mutableStateOf(RecorderState.Idle) }
     var startedAt by remember { mutableStateOf(0L) }
     var elapsed by remember { mutableStateOf(0L) }
     var error by remember { mutableStateOf<String?>(null) }
 
+    fun safeCancel() {
+        Log.d(TAG, "cancel state=$recorderState file=${outputFile.absolutePath}")
+        runCatching { recording?.close() }
+        recording = null
+        outputFile.delete()
+        onDismiss()
+    }
+
     DisposableEffect(Unit) {
         onDispose {
+            Log.d(TAG, "dispose state=$recorderState")
             runCatching { recording?.close() }
             runCatching { ProcessCameraProvider.getInstance(context).get().unbindAll() }
         }
     }
 
-    LaunchedEffect(startedAt) {
-        while (startedAt > 0) {
+    LaunchedEffect(startedAt, recorderState) {
+        while (recorderState == RecorderState.Recording && startedAt > 0) {
             elapsed = System.currentTimeMillis() - startedAt
-            if (elapsed >= 60_000L) recording?.stop()
+            if (elapsed >= MAX_VIDEO_NOTE_MS) {
+                recorderState = RecorderState.Finalizing
+                runCatching { recording?.stop() }.onFailure { error = it.message ?: "Failed to stop recording"; recorderState = RecorderState.Error }
+            }
             delay(250)
         }
     }
@@ -87,10 +110,11 @@ fun VideoNoteRecorderDialog(
         Column(horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) {
             Box(modifier = Modifier.size(292.dp).clip(CircleShape).border(4.dp, ColorTokens.Primary, CircleShape).background(Color.Black), contentAlignment = Alignment.Center) {
                 AndroidView(
-                    modifier = Modifier.fillMaxSize(),
+                    modifier = Modifier.fillMaxSize().clip(CircleShape),
                     factory = { ctx ->
                         PreviewView(ctx).also { previewView ->
-                            bindCamera(ctx, previewView, lifecycleOwner, onReady = { videoCapture = it }, onError = { error = it })
+                            applyCircularOutline(previewView)
+                            bindCamera(ctx, previewView, lifecycleOwner, onReady = { videoCapture = it }, onError = { message -> error = message; recorderState = RecorderState.Error })
                         }
                     }
                 )
@@ -99,23 +123,45 @@ fun VideoNoteRecorderDialog(
             Spacer(Modifier.height(18.dp))
             error?.let { Text(it, style = TypographyTokens.LabelSmall, color = ColorTokens.Error, modifier = Modifier.padding(bottom = 8.dp)) }
             Row(horizontalArrangement = Arrangement.spacedBy(18.dp), verticalAlignment = Alignment.CenterVertically) {
-                IconButton(onClick = { runCatching { recording?.close() }; outputFile.delete(); onDismiss() }, colors = IconButtonDefaults.iconButtonColors(containerColor = Color.White.copy(alpha = 0.14f), contentColor = Color.White)) {
+                IconButton(onClick = { if (recorderState != RecorderState.Finalizing) safeCancel() }, enabled = recorderState != RecorderState.Finalizing, colors = IconButtonDefaults.iconButtonColors(containerColor = Color.White.copy(alpha = 0.14f), contentColor = Color.White)) {
                     Icon(Icons.Default.Close, contentDescription = "Cancel")
                 }
                 IconButton(
                     onClick = {
-                        val capture = videoCapture ?: return@IconButton
-                        if (recording == null) {
-                            recording = startRecording(context, capture, outputFile, onDone = { file, duration -> onRecorded(file, duration) }, onError = { error = it })
-                            startedAt = System.currentTimeMillis()
-                        } else {
-                            recording?.stop()
-                            startedAt = 0L
+                        val capture = videoCapture ?: run { error = "Camera is not ready"; return@IconButton }
+                        when (recorderState) {
+                            RecorderState.Idle, RecorderState.Error -> {
+                                error = null
+                                runCatching {
+                                    recording = startRecording(context, capture, outputFile, onDone = { file, duration -> onRecorded(file, duration) }, onError = { message -> error = message; recorderState = RecorderState.Error }, onFinalize = { recording = null; startedAt = 0L; recorderState = RecorderState.Finalizing })
+                                    startedAt = System.currentTimeMillis()
+                                    elapsed = 0L
+                                    recorderState = RecorderState.Recording
+                                }.onFailure { throwable -> error = throwable.message ?: "Failed to start recording"; recorderState = RecorderState.Error }
+                            }
+                            RecorderState.Recording -> {
+                                recorderState = RecorderState.Finalizing
+                                runCatching { recording?.stop() }.onFailure { throwable -> error = throwable.message ?: "Failed to stop recording"; recorderState = RecorderState.Error }
+                            }
+                            RecorderState.Finalizing -> Unit
                         }
                     },
+                    enabled = videoCapture != null && recorderState != RecorderState.Finalizing,
                     colors = IconButtonDefaults.iconButtonColors(containerColor = ColorTokens.Primary, contentColor = ColorTokens.TextOnPrimary)
-                ) { Icon(Icons.Default.Send, contentDescription = if (recording == null) "Record" else "Send") }
+                ) {
+                    Icon(if (recorderState == RecorderState.Recording) Icons.Default.Send else Icons.Default.FiberManualRecord, contentDescription = if (recorderState == RecorderState.Recording) "Send" else "Record")
+                }
             }
+        }
+    }
+}
+
+private fun applyCircularOutline(previewView: PreviewView) {
+    previewView.scaleType = PreviewView.ScaleType.FILL_CENTER
+    previewView.clipToOutline = true
+    previewView.outlineProvider = object : ViewOutlineProvider() {
+        override fun getOutline(view: View, outline: Outline) {
+            outline.setOval(0, 0, view.width, view.height)
         }
     }
 }
@@ -136,8 +182,12 @@ private fun bindCamera(
             val capture = VideoCapture.withOutput(recorder)
             provider.unbindAll()
             provider.bindToLifecycle(lifecycleOwner, CameraSelector.DEFAULT_FRONT_CAMERA, preview, capture)
+            Log.d(TAG, "bindCamera success")
             onReady(capture)
-        }.onFailure { onError(it.message ?: "Camera unavailable") }
+        }.onFailure { throwable ->
+            Log.e(TAG, "bindCamera failed", throwable)
+            onError(throwable.message ?: "Camera unavailable")
+        }
     }, ContextCompat.getMainExecutor(context))
 }
 
@@ -147,15 +197,25 @@ private fun startRecording(
     capture: VideoCapture<Recorder>,
     file: File,
     onDone: (File, Int?) -> Unit,
-    onError: (String) -> Unit
+    onError: (String) -> Unit,
+    onFinalize: () -> Unit
 ): Recording {
     val started = System.currentTimeMillis()
     val options = FileOutputOptions.Builder(file).build()
-    return capture.output.prepareRecording(context, options).withAudioEnabled().start(ContextCompat.getMainExecutor(context)) { event ->
-        when (event) {
-            is VideoRecordEvent.Finalize -> {
-                if (!event.hasError() && file.exists() && file.length() > 0) onDone(file, (System.currentTimeMillis() - started).toInt())
-                else onError(event.error.toString())
+    val pending = capture.output.prepareRecording(context, options)
+    val hasAudio = ContextCompat.checkSelfPermission(context, Manifest.permission.RECORD_AUDIO) == PackageManager.PERMISSION_GRANTED
+    Log.d(TAG, "startRecording file=${file.absolutePath} audio=$hasAudio")
+    val prepared = if (hasAudio) pending.withAudioEnabled() else pending
+    return prepared.start(ContextCompat.getMainExecutor(context)) { event ->
+        if (event is VideoRecordEvent.Finalize) {
+            onFinalize()
+            val size = file.length()
+            if (!event.hasError() && file.exists() && size > 0) {
+                Log.d(TAG, "finalize success file=${file.absolutePath} size=$size")
+                onDone(file, (System.currentTimeMillis() - started).toInt())
+            } else {
+                Log.e(TAG, "finalize failed error=${event.error} file=${file.absolutePath} size=$size")
+                onError("Video note recording failed")
             }
         }
     }
