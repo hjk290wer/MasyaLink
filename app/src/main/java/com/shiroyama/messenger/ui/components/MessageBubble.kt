@@ -85,6 +85,9 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 
+private const val REPLY_SWIPE_THRESHOLD = 58f
+private const val REPLY_SWIPE_MAX_OFFSET = 92f
+
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
 fun MessageBubble(
@@ -103,24 +106,33 @@ fun MessageBubble(
     val shape = if (isMine) ShapeTokens.BubbleMine else ShapeTokens.BubbleOthers
     val haptic = LocalHapticFeedback.current
     var dragOffset by remember(message.id) { mutableStateOf(0f) }
-    var swipeTriggered by remember(message.id) { mutableStateOf(false) }
+    var hapticTriggered by remember(message.id) { mutableStateOf(false) }
     val animatedOffset by animateFloatAsState(targetValue = dragOffset, label = "swipeReplyOffset")
     val canAct = !message.id.startsWith("optimistic_")
 
     Row(modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp), horizontalArrangement = if (isMine) Arrangement.End else Arrangement.Start, verticalAlignment = Alignment.CenterVertically) {
         if (!isMine && animatedOffset > 8f) ReplyHint(animatedOffset)
         Surface(
-            modifier = Modifier.widthIn(max = 352.dp).offset { IntOffset(animatedOffset.roundToInt(), 0) }.animateContentSize().pointerInput(message.id) {
+            modifier = Modifier.widthIn(max = 352.dp).offset { IntOffset(animatedOffset.roundToInt(), 0) }.animateContentSize().pointerInput(message.id, isMine, canAct) {
                 detectHorizontalDragGestures(
                     onDragEnd = {
-                        if (abs(dragOffset) > 58f && !swipeTriggered && canAct) { swipeTriggered = true; haptic.performHapticFeedback(HapticFeedbackType.LongPress); onReply(message) }
-                        dragOffset = 0f; swipeTriggered = false
+                        val shouldReply = canAct && abs(dragOffset) >= REPLY_SWIPE_THRESHOLD
+                        if (shouldReply) onReply(message)
+                        dragOffset = 0f
+                        hapticTriggered = false
                     },
-                    onDragCancel = { dragOffset = 0f; swipeTriggered = false },
+                    onDragCancel = {
+                        dragOffset = 0f
+                        hapticTriggered = false
+                    },
                     onHorizontalDrag = { change, amount ->
-                        val allowed = if (isMine) amount.coerceAtMost(0f) else amount.coerceAtLeast(0f)
-                        dragOffset = (dragOffset + allowed).coerceIn(-92f, 92f)
-                        if (abs(dragOffset) > 58f && !swipeTriggered && canAct) { swipeTriggered = true; haptic.performHapticFeedback(HapticFeedbackType.LongPress) }
+                        val allowedDelta = if (isMine) amount.coerceAtMost(0f) else amount.coerceAtLeast(0f)
+                        val newOffset = (dragOffset + allowedDelta).coerceIn(-REPLY_SWIPE_MAX_OFFSET, REPLY_SWIPE_MAX_OFFSET)
+                        dragOffset = newOffset
+                        if (canAct && abs(newOffset) >= REPLY_SWIPE_THRESHOLD && !hapticTriggered) {
+                            hapticTriggered = true
+                            haptic.performHapticFeedback(HapticFeedbackType.LongPress)
+                        }
                         change.consume()
                     }
                 )
