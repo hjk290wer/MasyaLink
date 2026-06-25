@@ -1,26 +1,57 @@
 package com.shiroyama.messenger.ui.screens.pairing
 
-import android.graphics.BitmapFactory
-import androidx.compose.foundation.Image
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
-import androidx.compose.foundation.layout.*
+import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.shape.CircleShape
-import androidx.compose.material3.*
-import androidx.compose.runtime.*
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material3.Button
+import androidx.compose.material3.ButtonDefaults
+import androidx.compose.material3.Card
+import androidx.compose.material3.CardDefaults
+import androidx.compose.material3.CircularProgressIndicator
+import androidx.compose.material3.Icon
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Surface
+import androidx.compose.material3.Text
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.collectAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.draw.scale
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.text.style.TextAlign
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import com.shiroyama.messenger.core.storage.LocalSessionStorage
+import com.shiroyama.messenger.ui.components.AvatarView
 import com.shiroyama.messenger.ui.theme.ColorTokens
 import com.shiroyama.messenger.ui.theme.ShapeTokens
 import com.shiroyama.messenger.ui.theme.SpacingTokens
 import com.shiroyama.messenger.ui.theme.TypographyTokens
 
-@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PairingScreen(
     sessionStorage: LocalSessionStorage,
@@ -41,93 +72,172 @@ fun PairingScreen(
         else -> ProfileButtonState("Profile B")
     }
     val namesLoading = (state as? PairingUiState.Idle)?.isNamesLoading == true
+    val isSelecting = state is PairingUiState.Loading
 
     LaunchedEffect(state) {
         if (state is PairingUiState.Success) onNavigateToChat()
     }
 
-    Scaffold(
-        topBar = {
-            TopAppBar(
-                title = { Text("MasyaLink", style = TypographyTokens.TitleLarge) },
-                colors = TopAppBarDefaults.topAppBarColors(containerColor = ColorTokens.Primary, titleContentColor = ColorTokens.TextOnPrimary)
-            )
-        },
-        containerColor = ColorTokens.Background
-    ) { innerPadding ->
-        Box(
-            modifier = Modifier.fillMaxSize().padding(innerPadding).padding(SpacingTokens.Medium),
-            contentAlignment = Alignment.Center
-        ) {
-            Card(
-                modifier = Modifier.fillMaxWidth().padding(horizontal = SpacingTokens.Small),
-                colors = CardDefaults.cardColors(containerColor = ColorTokens.Surface),
-                shape = ShapeTokens.Card,
-                elevation = CardDefaults.cardElevation(defaultElevation = 2.dp)
-            ) {
-                Column(modifier = Modifier.fillMaxWidth().padding(SpacingTokens.Medium), horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("Choose your profile", style = TypographyTokens.TitleMedium, color = ColorTokens.TextPrimary)
-                    Spacer(modifier = Modifier.height(SpacingTokens.Small))
-                    Text(
-                        text = "Choose your side of the private chat. Names and avatars are loaded from the server.",
-                        style = TypographyTokens.BodyMedium,
-                        color = ColorTokens.TextSecondary
-                    )
-                    Spacer(modifier = Modifier.height(SpacingTokens.Large))
-
-                    if (state is PairingUiState.Error) {
-                        Text((state as PairingUiState.Error).message, color = ColorTokens.Error, style = TypographyTokens.LabelSmall, modifier = Modifier.padding(bottom = SpacingTokens.Small))
-                    }
-                    if (namesLoading) {
-                        Text("Loading profiles...", style = TypographyTokens.LabelSmall, color = ColorTokens.TextSecondary, modifier = Modifier.padding(bottom = SpacingTokens.Small))
-                    }
-                    if (state is PairingUiState.Loading) {
-                        CircularProgressIndicator(color = ColorTokens.Primary)
-                    } else {
-                        ProfileButton(profile = profileA, subtitle = "Profile A", onClick = { viewModel.selectProfile("A", sessionStorage, onNavigateToChat) })
-                        Spacer(modifier = Modifier.height(SpacingTokens.Small))
-                        ProfileButton(profile = profileB, subtitle = "Profile B", onClick = { viewModel.selectProfile("B", sessionStorage, onNavigateToChat) })
-                    }
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ProfileButton(profile: ProfileButtonState, subtitle: String, onClick: () -> Unit) {
-    Button(
-        onClick = onClick,
-        modifier = Modifier.fillMaxWidth(),
-        shape = ShapeTokens.Button,
-        colors = ButtonDefaults.buttonColors(containerColor = ColorTokens.Primary)
-    ) {
-        Row(
-            modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp),
-            verticalAlignment = Alignment.CenterVertically,
-            horizontalArrangement = Arrangement.Center
-        ) {
-            ProfileAvatar(profile = profile)
-            Spacer(modifier = Modifier.width(12.dp))
-            Column(horizontalAlignment = Alignment.Start) {
-                Text(profile.name, style = TypographyTokens.BodyLarge, color = ColorTokens.TextOnPrimary)
-                Text(subtitle, style = TypographyTokens.LabelSmall, color = ColorTokens.TextOnPrimary.copy(alpha = 0.75f))
-            }
-        }
-    }
-}
-
-@Composable
-private fun ProfileAvatar(profile: ProfileButtonState) {
-    val bitmap = profile.avatarBytes?.let { BitmapFactory.decodeByteArray(it, 0, it.size) }
     Box(
-        modifier = Modifier.size(48.dp).clip(CircleShape).background(ColorTokens.TextOnPrimary.copy(alpha = 0.18f)),
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Brush.verticalGradient(listOf(ColorTokens.GradientStart, ColorTokens.Background, ColorTokens.BackgroundAlt)))
+            .padding(horizontal = 22.dp, vertical = 28.dp),
         contentAlignment = Alignment.Center
     ) {
-        if (bitmap != null) {
-            Image(bitmap = bitmap.asImageBitmap(), contentDescription = profile.name, modifier = Modifier.fillMaxSize(), contentScale = ContentScale.Crop)
-        } else {
-            Text(profile.name.firstOrNull()?.uppercaseChar()?.toString() ?: "?", color = ColorTokens.TextOnPrimary, style = TypographyTokens.TitleMedium)
+        Column(
+            modifier = Modifier.widthIn(max = 520.dp),
+            horizontalAlignment = Alignment.CenterHorizontally
+        ) {
+            Surface(
+                modifier = Modifier.size(64.dp),
+                shape = CircleShape,
+                color = ColorTokens.Primary.copy(alpha = 0.12f),
+                border = BorderStroke(1.dp, ColorTokens.BorderLight)
+            ) {
+                Box(contentAlignment = Alignment.Center) {
+                    Icon(Icons.Default.Favorite, contentDescription = null, tint = ColorTokens.Primary, modifier = Modifier.size(30.dp))
+                }
+            }
+            Spacer(Modifier.height(18.dp))
+            Text("MasyaLink", style = TypographyTokens.TitleLarge, color = ColorTokens.TextPrimary)
+            Text(
+                text = "Private chat for two profiles",
+                style = TypographyTokens.BodyMedium,
+                color = ColorTokens.TextSecondary,
+                textAlign = TextAlign.Center
+            )
+            Spacer(Modifier.height(28.dp))
+
+            if (state is PairingUiState.Error) {
+                RetryCard(
+                    message = (state as PairingUiState.Error).message,
+                    onRetry = { viewModel.loadProfileNames() }
+                )
+                Spacer(Modifier.height(14.dp))
+            }
+
+            if (namesLoading) {
+                LoadingProfilesCard()
+            } else {
+                ProfileCard(
+                    profile = profileA,
+                    profileKey = "A",
+                    enabled = !isSelecting,
+                    onClick = { viewModel.selectProfile("A", sessionStorage, onNavigateToChat) }
+                )
+                Spacer(Modifier.height(14.dp))
+                ProfileCard(
+                    profile = profileB,
+                    profileKey = "B",
+                    enabled = !isSelecting,
+                    onClick = { viewModel.selectProfile("B", sessionStorage, onNavigateToChat) }
+                )
+            }
+
+            if (isSelecting) {
+                Spacer(Modifier.height(22.dp))
+                CircularProgressIndicator(color = ColorTokens.Primary, strokeWidth = 3.dp, modifier = Modifier.size(32.dp))
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProfileCard(
+    profile: ProfileButtonState,
+    profileKey: String,
+    enabled: Boolean,
+    onClick: () -> Unit
+) {
+    val interaction = remember { MutableInteractionSource() }
+    val pressed by interaction.collectIsPressedAsState()
+    val scale by animateFloatAsState(if (pressed) 0.975f else 1f, label = "profilePress")
+    val borderColor by animateColorAsState(if (pressed) ColorTokens.Primary else ColorTokens.BorderLight, label = "profileBorder")
+
+    Card(
+        modifier = Modifier
+            .fillMaxWidth()
+            .scale(scale)
+            .clickable(enabled = enabled, interactionSource = interaction, indication = null, onClick = onClick),
+        shape = ShapeTokens.Card,
+        colors = CardDefaults.cardColors(containerColor = ColorTokens.SurfaceElevated),
+        border = BorderStroke(1.dp, borderColor),
+        elevation = CardDefaults.cardElevation(defaultElevation = if (ColorTokens.IsDark) 0.dp else 7.dp)
+    ) {
+        Row(
+            modifier = Modifier
+                .fillMaxWidth()
+                .background(Brush.horizontalGradient(listOf(ColorTokens.SurfaceElevated, ColorTokens.AccentSoft.copy(alpha = 0.56f))))
+                .padding(18.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            AvatarView(name = profile.name, avatarBytes = profile.avatarBytes, size = 68.dp)
+            Spacer(Modifier.width(16.dp))
+            Column(modifier = Modifier.weight(1f)) {
+                Text(
+                    text = profile.name,
+                    style = TypographyTokens.TitleMedium,
+                    color = ColorTokens.TextPrimary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Spacer(Modifier.height(3.dp))
+                Text("Profile $profileKey · tap to open chat", style = TypographyTokens.LabelSmall, color = ColorTokens.TextSecondary)
+            }
+            Surface(shape = CircleShape, color = ColorTokens.Primary.copy(alpha = 0.12f)) {
+                Text(profileKey, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp), style = TypographyTokens.LabelSmall, color = ColorTokens.Primary)
+            }
+        }
+    }
+}
+
+@Composable
+private fun LoadingProfilesCard() {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = ShapeTokens.Card,
+        colors = CardDefaults.cardColors(containerColor = ColorTokens.SurfaceElevated),
+        border = BorderStroke(1.dp, ColorTokens.BorderLight),
+        elevation = CardDefaults.cardElevation(defaultElevation = 4.dp)
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(18.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            CircularProgressIndicator(color = ColorTokens.Primary, strokeWidth = 3.dp, modifier = Modifier.size(36.dp))
+            Spacer(Modifier.width(14.dp))
+            Column {
+                Text("Loading profiles", style = TypographyTokens.TitleMedium, color = ColorTokens.TextPrimary)
+                Text("Names and avatars are coming from Supabase", style = TypographyTokens.LabelSmall, color = ColorTokens.TextSecondary)
+            }
+        }
+    }
+}
+
+@Composable
+private fun RetryCard(message: String, onRetry: () -> Unit) {
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = ShapeTokens.CardSmall,
+        colors = CardDefaults.cardColors(containerColor = ColorTokens.Surface),
+        border = BorderStroke(1.dp, ColorTokens.Error.copy(alpha = 0.28f))
+    ) {
+        Row(
+            modifier = Modifier.fillMaxWidth().padding(14.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            Column(modifier = Modifier.weight(1f)) {
+                Text("Could not refresh profiles", style = TypographyTokens.BodyLarge, color = ColorTokens.TextPrimary)
+                Text(message, style = TypographyTokens.LabelSmall, color = ColorTokens.TextSecondary)
+            }
+            Button(
+                onClick = onRetry,
+                shape = ShapeTokens.Button,
+                colors = ButtonDefaults.buttonColors(containerColor = ColorTokens.Primary, contentColor = ColorTokens.TextOnPrimary)
+            ) {
+                Icon(Icons.Default.Refresh, null, modifier = Modifier.size(18.dp))
+            }
         }
     }
 }
