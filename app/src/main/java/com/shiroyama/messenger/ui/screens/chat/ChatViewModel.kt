@@ -1,9 +1,11 @@
 package com.shiroyama.messenger.ui.screens.chat
 
 import android.os.Build
+import android.util.Log
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.shiroyama.messenger.core.storage.LocalSessionStorage
+import com.shiroyama.messenger.core.storage.StoragePathNormalizer
 import com.shiroyama.messenger.data.repository.MessengerRepositoryImpl
 import com.shiroyama.messenger.domain.model.Device
 import com.shiroyama.messenger.domain.model.LocalSession
@@ -12,25 +14,25 @@ import com.shiroyama.messenger.domain.model.MessageReceipt
 import com.shiroyama.messenger.domain.usecase.DeleteMessageForEveryoneUseCase
 import com.shiroyama.messenger.domain.usecase.DownloadAttachmentUseCase
 import com.shiroyama.messenger.domain.usecase.LoadDevicesUseCase
+import com.shiroyama.messenger.domain.usecase.LoadFixedProfilesUseCase
 import com.shiroyama.messenger.domain.usecase.LoadMessageReceiptsUseCase
 import com.shiroyama.messenger.domain.usecase.LoadMessagesUseCase
-import com.shiroyama.messenger.domain.usecase.LoadFixedProfilesUseCase
 import com.shiroyama.messenger.domain.usecase.LoadTypingStatesUseCase
 import com.shiroyama.messenger.domain.usecase.MarkMessagesDeliveredUseCase
 import com.shiroyama.messenger.domain.usecase.MarkMessagesReadUseCase
 import com.shiroyama.messenger.domain.usecase.PairDeviceUseCase
-import com.shiroyama.messenger.domain.usecase.SendTextMessageUseCase
 import com.shiroyama.messenger.domain.usecase.SendAttachmentUseCase
+import com.shiroyama.messenger.domain.usecase.SendTextMessageUseCase
 import com.shiroyama.messenger.domain.usecase.SetTypingStateUseCase
 import com.shiroyama.messenger.domain.usecase.TouchPresenceUseCase
+import java.time.Instant
+import java.util.UUID
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
-import java.time.Instant
-import java.util.UUID
 
 sealed interface SendStatus {
     object Idle : SendStatus
@@ -60,6 +62,10 @@ class ChatViewModel(
     private val pairDeviceUseCase: PairDeviceUseCase = PairDeviceUseCase(MessengerRepositoryImpl()),
     private val loadFixedProfilesUseCase: LoadFixedProfilesUseCase = LoadFixedProfilesUseCase(MessengerRepositoryImpl())
 ) : ViewModel() {
+
+    private companion object {
+        const val TAG = "ChatViewModel"
+    }
 
     private val _messages = MutableStateFlow<List<Message>>(emptyList())
     val messages: StateFlow<List<Message>> = _messages.asStateFlow()
@@ -93,7 +99,6 @@ class ChatViewModel(
     private var devicesJob: Job? = null
     private var typingJob: Job? = null
     private var typingStopJob: Job? = null
-
     private var session: LocalSession? = null
     private var sessionStorage: LocalSessionStorage? = null
     private var lastTypingSent: Boolean? = null
@@ -112,12 +117,7 @@ class ChatViewModel(
 
     private fun isInvalidSessionError(message: String?): Boolean {
         val text = message?.lowercase().orEmpty()
-        return text.contains("device does not belong") ||
-            text.contains("not registered") ||
-            text.contains("account not found") ||
-            text.contains("jwt") ||
-            text.contains("401") ||
-            text.contains("403")
+        return text.contains("device does not belong") || text.contains("not registered") || text.contains("account not found") || text.contains("jwt") || text.contains("401") || text.contains("403")
     }
 
     private fun invalidateSession() {
@@ -133,15 +133,10 @@ class ChatViewModel(
         if (!isInvalidSessionError(errorMessage) || isRecoveringSession) return false
         val current = session ?: return false
         val storage = sessionStorage ?: return false
-
         return try {
             isRecoveringSession = true
             val deviceName = "${Build.MANUFACTURER} ${Build.MODEL}"
-            val refreshed = pairDeviceUseCase(
-                profileKey = current.profileKey,
-                displayName = current.displayName,
-                deviceName = deviceName
-            )
+            val refreshed = pairDeviceUseCase(current.profileKey, current.displayName, deviceName)
             storage.saveSession(refreshed)
             session = refreshed
             true
@@ -155,18 +150,15 @@ class ChatViewModel(
 
     private suspend fun handlePossibleSessionError(e: Exception) {
         val recovered = recoverSessionIfPossible(e.message)
-        if (!recovered && isInvalidSessionError(e.message)) {
-            invalidateSession()
-        }
+        if (!recovered && isInvalidSessionError(e.message)) invalidateSession()
     }
 
     private fun applyReceipts(messages: List<Message>, receipts: List<MessageReceipt>, currentAccountId: String): List<Message> {
         if (messages.isEmpty()) return messages
         val receiptsByMessage = receipts.groupBy { it.messageId }
         return messages.map { msg ->
-            if (!msg.isMine || msg.id.startsWith("optimistic_")) {
-                msg
-            } else {
+            if (!msg.isMine || msg.id.startsWith("optimistic_")) msg
+            else {
                 val messageReceipts = receiptsByMessage[msg.id].orEmpty().filter { it.accountId != currentAccountId }
                 val status = when {
                     messageReceipts.any { !it.readAt.isNullOrBlank() } -> "read"
@@ -179,46 +171,16 @@ class ChatViewModel(
     }
 
     private suspend fun refreshMessagesAndReceipts(currentSession: LocalSession) {
-        val fetchedList = loadMessagesUseCase(
-            token = currentSession.accessToken,
-            roomId = currentSession.roomId,
-            currentDeviceId = currentSession.deviceId,
-            currentAccountId = currentSession.accountId
-        )
-
+        val fetchedList = loadMessagesUseCase(currentSession.accessToken, currentSession.roomId, currentSession.deviceId, currentSession.accountId)
         try {
-            markMessagesDeliveredUseCase(
-                token = currentSession.accessToken,
-                roomId = currentSession.roomId,
-                deviceId = currentSession.deviceId
-            )
-            markMessagesReadUseCase(
-                token = currentSession.accessToken,
-                roomId = currentSession.roomId,
-                deviceId = currentSession.deviceId
-            )
-        } catch (e: Exception) {
-            e.printStackTrace()
-        }
-
-        val receipts = try {
-            loadMessageReceiptsUseCase(
-                token = currentSession.accessToken,
-                roomId = currentSession.roomId
-            )
-        } catch (e: Exception) {
-            e.printStackTrace()
-            emptyList()
-        }
-
+            markMessagesDeliveredUseCase(currentSession.accessToken, currentSession.roomId, currentSession.deviceId)
+            markMessagesReadUseCase(currentSession.accessToken, currentSession.roomId, currentSession.deviceId)
+        } catch (e: Exception) { e.printStackTrace() }
+        val receipts = try { loadMessageReceiptsUseCase(currentSession.accessToken, currentSession.roomId) } catch (e: Exception) { e.printStackTrace(); emptyList() }
         val fetchedWithReceipts = applyReceipts(fetchedList, receipts, currentSession.accountId)
         val optimisticList = _messages.value.filter { it.id.startsWith("optimistic_") }
         val combined = fetchedWithReceipts.toMutableList()
-        optimisticList.forEach { opt ->
-            if (combined.none { it.text == opt.text && it.isMine }) {
-                combined.add(opt)
-            }
-        }
+        optimisticList.forEach { opt -> if (combined.none { it.text == opt.text && it.isMine }) combined.add(opt) }
         _messages.value = combined
     }
 
@@ -228,12 +190,7 @@ class ChatViewModel(
             while (true) {
                 val currentSession = session
                 if (currentSession != null) {
-                    try {
-                        refreshMessagesAndReceipts(currentSession)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                        handlePossibleSessionError(e)
-                    }
+                    try { refreshMessagesAndReceipts(currentSession) } catch (e: Exception) { e.printStackTrace(); handlePossibleSessionError(e) }
                 }
                 delay(2000)
             }
@@ -246,12 +203,7 @@ class ChatViewModel(
             while (true) {
                 val currentSession = session
                 if (currentSession != null) {
-                    try {
-                        touchPresenceUseCase(token = currentSession.accessToken, deviceId = currentSession.deviceId)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                        handlePossibleSessionError(e)
-                    }
+                    try { touchPresenceUseCase(currentSession.accessToken, currentSession.deviceId) } catch (e: Exception) { e.printStackTrace(); handlePossibleSessionError(e) }
                 }
                 delay(15000)
             }
@@ -265,22 +217,16 @@ class ChatViewModel(
                 val currentSession = session
                 if (currentSession != null) {
                     try {
-                        val devices = loadDevicesUseCase(token = currentSession.accessToken, roomId = currentSession.roomId)
-                        val peer = devices
-                            .filter { it.accountId != null && it.accountId != currentSession.accountId }
-                            .maxByOrNull { it.lastSeenAt ?: "" }
+                        val devices = loadDevicesUseCase(currentSession.accessToken, currentSession.roomId)
+                        val peer = devices.filter { it.accountId != null && it.accountId != currentSession.accountId }.maxByOrNull { it.lastSeenAt ?: "" }
                         _peerDevice.value = peer
                         updatePeerProfile(currentSession, peer)
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                        handlePossibleSessionError(e)
-                    }
+                    } catch (e: Exception) { e.printStackTrace(); handlePossibleSessionError(e) }
                 }
                 delay(10000)
             }
         }
     }
-
 
     private suspend fun updatePeerProfile(currentSession: LocalSession, peer: Device?) {
         val peerKey = if (currentSession.profileKey.uppercase() == "A") "B" else "A"
@@ -291,8 +237,9 @@ class ChatViewModel(
         if (avatarPath != lastPeerAvatarPath) {
             lastPeerAvatarPath = avatarPath
             _peerAvatarBytes.value = null
-            if (!avatarPath.isNullOrBlank()) {
-                _peerAvatarBytes.value = runCatching { downloadAttachmentUseCase(currentSession.accessToken, avatarPath) }.getOrNull()
+            val normalizedAvatarPath = StoragePathNormalizer.normalizeStoragePath(avatarPath)
+            if (!normalizedAvatarPath.isNullOrBlank()) {
+                _peerAvatarBytes.value = runCatching { downloadAttachmentUseCase(currentSession.accessToken, normalizedAvatarPath) }.getOrNull()
             }
         }
     }
@@ -304,14 +251,9 @@ class ChatViewModel(
                 val currentSession = session
                 if (currentSession != null) {
                     try {
-                        val states = loadTypingStatesUseCase(token = currentSession.accessToken, roomId = currentSession.roomId)
-                        _isPeerTyping.value = states.any {
-                            it.accountId != null && it.accountId != currentSession.accountId && it.isTyping
-                        }
-                    } catch (e: Exception) {
-                        e.printStackTrace()
-                        handlePossibleSessionError(e)
-                    }
+                        val states = loadTypingStatesUseCase(currentSession.accessToken, currentSession.roomId)
+                        _isPeerTyping.value = states.any { it.accountId != null && it.accountId != currentSession.accountId && it.isTyping }
+                    } catch (e: Exception) { e.printStackTrace(); handlePossibleSessionError(e) }
                 }
                 delay(2000)
             }
@@ -323,103 +265,53 @@ class ChatViewModel(
         val shouldType = text.isNotBlank()
         if (lastTypingSent != shouldType) {
             lastTypingSent = shouldType
-            viewModelScope.launch {
-                try {
-                    setTypingStateUseCase(
-                        token = currentSession.accessToken,
-                        roomId = currentSession.roomId,
-                        deviceId = currentSession.deviceId,
-                        isTyping = shouldType
-                    )
-                } catch (e: Exception) {
-                    e.printStackTrace()
-                }
-            }
+            viewModelScope.launch { try { setTypingStateUseCase(currentSession.accessToken, currentSession.roomId, currentSession.deviceId, shouldType) } catch (e: Exception) { e.printStackTrace() } }
         }
-
         typingStopJob?.cancel()
-        if (shouldType) {
-            typingStopJob = viewModelScope.launch {
-                delay(4000)
-                sendTypingFalse()
-            }
-        }
+        if (shouldType) typingStopJob = viewModelScope.launch { delay(4000); sendTypingFalse() }
     }
 
     private fun sendTypingFalse() {
         val currentSession = session ?: return
         if (lastTypingSent == false) return
         lastTypingSent = false
-        viewModelScope.launch {
-            try {
-                setTypingStateUseCase(
-                    token = currentSession.accessToken,
-                    roomId = currentSession.roomId,
-                    deviceId = currentSession.deviceId,
-                    isTyping = false
-                )
-            } catch (e: Exception) {
-                e.printStackTrace()
-            }
-        }
+        viewModelScope.launch { try { setTypingStateUseCase(currentSession.accessToken, currentSession.roomId, currentSession.deviceId, false) } catch (e: Exception) { e.printStackTrace() } }
     }
 
     fun startReplyToMessage(message: Message) {
-        if (!message.id.startsWith("optimistic_")) {
-            _replyTarget.value = message
-        }
+        Log.d(TAG, "startReplyToMessage called id=${message.id} type=${message.type} text=${message.text.take(80)}")
+        if (!message.id.startsWith("optimistic_")) _replyTarget.value = message
     }
 
-    fun clearReplyTarget() {
-        _replyTarget.value = null
-    }
+    fun clearReplyTarget() { _replyTarget.value = null }
 
-    fun requestDeleteMessage(message: Message) {
-        if (!message.id.startsWith("optimistic_")) {
-            _pendingDeleteMessage.value = message
-        }
-    }
-
-    fun cancelDeleteMessage() {
-        _pendingDeleteMessage.value = null
-    }
+    fun requestDeleteMessage(message: Message) { if (!message.id.startsWith("optimistic_")) _pendingDeleteMessage.value = message }
+    fun cancelDeleteMessage() { _pendingDeleteMessage.value = null }
 
     fun confirmDeleteMessageForEveryone() {
         val currentSession = session ?: return
         val message = _pendingDeleteMessage.value ?: return
         _pendingDeleteMessage.value = null
-
         viewModelScope.launch {
             try {
-                val success = deleteMessageForEveryoneUseCase(
-                    token = currentSession.accessToken,
-                    roomId = currentSession.roomId,
-                    deviceId = currentSession.deviceId,
-                    messageId = message.id
-                )
+                val success = deleteMessageForEveryoneUseCase(currentSession.accessToken, currentSession.roomId, currentSession.deviceId, message.id)
                 if (success) {
                     if (_replyTarget.value?.id == message.id) _replyTarget.value = null
                     _messages.value = _messages.value.filter { it.id != message.id }
                     refreshMessagesAndReceipts(currentSession)
-                } else {
-                    _sendStatus.value = SendStatus.Error("Failed to delete message")
-                }
-            } catch (e: Exception) {
-                _sendStatus.value = SendStatus.Error(e.message ?: "Failed to delete message")
-                handlePossibleSessionError(e)
-            }
+                } else _sendStatus.value = SendStatus.Error("Failed to delete message")
+            } catch (e: Exception) { _sendStatus.value = SendStatus.Error(e.message ?: "Failed to delete message"); handlePossibleSessionError(e) }
         }
     }
 
     fun sendMessage(text: String) {
         val currentSession = session ?: return
         if (text.isBlank()) return
-
         val messageText = text.trim()
         val reply = _replyTarget.value
+        Log.d(TAG, "sendMessage replyTargetBeforeSend=${reply?.id} replyType=${reply?.type}")
         sendTypingFalse()
         _replyTarget.value = null
-
         val tempId = "optimistic_${UUID.randomUUID()}"
         val optimisticMsg = Message(
             id = tempId,
@@ -434,43 +326,27 @@ class ChatViewModel(
             isMine = true,
             deliveryStatus = "sending",
             replyToMessageId = reply?.id,
-            replyToText = reply?.text,
+            replyToText = replySnapshot(reply),
             replyToUsername = reply?.senderUsername ?: if (reply?.isMine == true) currentSession.displayName else null
         )
-
         _messages.value = _messages.value + optimisticMsg
         _sendStatus.value = SendStatus.Sending
-
         viewModelScope.launch {
             try {
-                val success = sendTextMessageUseCase(
-                    token = currentSession.accessToken,
-                    roomId = currentSession.roomId,
-                    deviceId = currentSession.deviceId,
-                    text = messageText,
-                    replyToMessageId = reply?.id
-                )
-                if (success) {
-                    _sendStatus.value = SendStatus.Idle
-                    refreshMessagesAndReceipts(currentSession)
-                } else {
-                    _messages.value = _messages.value.map { if (it.id == tempId) it.copy(deliveryStatus = "failed") else it }
-                    _sendStatus.value = SendStatus.Error("Failed to send message")
-                }
-            } catch (e: Exception) {
-                _messages.value = _messages.value.map { if (it.id == tempId) it.copy(deliveryStatus = "failed", formattedTime = "Failed") else it }
-                _sendStatus.value = SendStatus.Error(e.message ?: "Connection failed")
-                handlePossibleSessionError(e)
-            }
+                Log.d(TAG, "sendTextMessageUseCase replyToMessageId=${reply?.id}")
+                val success = sendTextMessageUseCase(currentSession.accessToken, currentSession.roomId, currentSession.deviceId, messageText, reply?.id)
+                if (success) { _sendStatus.value = SendStatus.Idle; refreshMessagesAndReceipts(currentSession) }
+                else { _messages.value = _messages.value.map { if (it.id == tempId) it.copy(deliveryStatus = "failed") else it }; _sendStatus.value = SendStatus.Error("Failed to send message") }
+            } catch (e: Exception) { _messages.value = _messages.value.map { if (it.id == tempId) it.copy(deliveryStatus = "failed", formattedTime = "Failed") else it }; _sendStatus.value = SendStatus.Error(e.message ?: "Connection failed"); handlePossibleSessionError(e) }
         }
     }
 
     fun sendAttachment(fileName: String, mimeType: String, bytes: ByteArray, forcedType: String? = null, durationMs: Int? = null) {
         val currentSession = session ?: return
         val reply = _replyTarget.value
+        Log.d(TAG, "sendAttachment replyTargetBeforeSend=${reply?.id} replyType=${reply?.type} fileName=$fileName")
         sendTypingFalse()
         _replyTarget.value = null
-
         val safeName = fileName.ifBlank { "attachment" }
         val safeMime = mimeType.ifBlank { "application/octet-stream" }
         val type = forcedType ?: when {
@@ -498,83 +374,49 @@ class ChatViewModel(
             isMine = true,
             deliveryStatus = "sending",
             replyToMessageId = reply?.id,
-            replyToText = reply?.text.ifBlankForAttachment(reply),
+            replyToText = replySnapshot(reply),
             replyToUsername = reply?.senderUsername ?: if (reply?.isMine == true) currentSession.displayName else null
         )
-
         _messages.value = _messages.value + optimisticMsg
         _sendStatus.value = SendStatus.Sending
-
         viewModelScope.launch {
             try {
-                val success = sendAttachmentUseCase(
-                    token = currentSession.accessToken,
-                    roomId = currentSession.roomId,
-                    deviceId = currentSession.deviceId,
-                    fileName = safeName,
-                    mimeType = safeMime,
-                    bytes = bytes,
-                    caption = null,
-                    replyToMessageId = reply?.id,
-                    durationMs = durationMs,
-                    forcedType = type
-                )
-                if (success) {
-                    _sendStatus.value = SendStatus.Idle
-                    refreshMessagesAndReceipts(currentSession)
-                } else {
-                    _messages.value = _messages.value.map { if (it.id == tempId) it.copy(deliveryStatus = "failed") else it }
-                    _sendStatus.value = SendStatus.Error("Failed to send attachment")
-                }
-            } catch (e: Exception) {
-                _messages.value = _messages.value.map { if (it.id == tempId) it.copy(deliveryStatus = "failed", formattedTime = "Failed") else it }
-                _sendStatus.value = SendStatus.Error(e.message ?: "Attachment upload failed")
-                handlePossibleSessionError(e)
-            }
+                Log.d(TAG, "sendAttachmentUseCase replyToMessageId=${reply?.id} type=$type size=${bytes.size}")
+                val success = sendAttachmentUseCase(currentSession.accessToken, currentSession.roomId, currentSession.deviceId, safeName, safeMime, bytes, null, reply?.id, durationMs, type)
+                if (success) { _sendStatus.value = SendStatus.Idle; refreshMessagesAndReceipts(currentSession) }
+                else { _messages.value = _messages.value.map { if (it.id == tempId) it.copy(deliveryStatus = "failed") else it }; _sendStatus.value = SendStatus.Error("Failed to send attachment") }
+            } catch (e: Exception) { _messages.value = _messages.value.map { if (it.id == tempId) it.copy(deliveryStatus = "failed", formattedTime = "Failed") else it }; _sendStatus.value = SendStatus.Error(e.message ?: "Attachment upload failed"); handlePossibleSessionError(e) }
         }
     }
 
     suspend fun downloadAttachmentDirect(message: Message): AttachmentDownload {
         val currentSession = session ?: throw IllegalStateException("No active session")
-        val path = message.mediaPath ?: throw IllegalArgumentException("Attachment path is empty")
+        val path = StoragePathNormalizer.requireStoragePath(message.mediaPath)
         val bytes = downloadAttachmentUseCase(currentSession.accessToken, path)
-        return AttachmentDownload(
-            fileName = message.mediaOriginalName ?: "attachment",
-            mimeType = message.mediaMime ?: "application/octet-stream",
-            bytes = bytes
-        )
+        return AttachmentDownload(message.mediaOriginalName ?: "attachment", message.mediaMime ?: "application/octet-stream", bytes)
     }
 
     fun downloadAttachment(message: Message, onResult: (Result<AttachmentDownload>) -> Unit) {
         val currentSession = session ?: return
-        val path = message.mediaPath
-        if (path.isNullOrBlank()) {
-            onResult(Result.failure(IllegalArgumentException("Attachment path is empty")))
-            return
-        }
+        val path = StoragePathNormalizer.normalizeStoragePath(message.mediaPath)
+        if (path.isNullOrBlank()) { onResult(Result.failure(IllegalArgumentException("Media path is invalid"))); return }
         viewModelScope.launch {
             try {
                 val bytes = downloadAttachmentUseCase(currentSession.accessToken, path)
-                onResult(Result.success(AttachmentDownload(
-                    fileName = message.mediaOriginalName ?: "attachment",
-                    mimeType = message.mediaMime ?: "application/octet-stream",
-                    bytes = bytes
-                )))
-            } catch (e: Exception) {
-                onResult(Result.failure(e))
-                handlePossibleSessionError(e)
-            }
+                onResult(Result.success(AttachmentDownload(message.mediaOriginalName ?: "attachment", message.mediaMime ?: "application/octet-stream", bytes)))
+            } catch (e: Exception) { onResult(Result.failure(e)); handlePossibleSessionError(e) }
         }
     }
 
-    private fun String?.ifBlankForAttachment(reply: Message?): String? {
+    private fun replySnapshot(reply: Message?): String? {
         if (reply == null) return null
-        if (!this.isNullOrBlank()) return this
+        if (reply.text.isNotBlank()) return reply.text
         return reply.mediaOriginalName ?: when (reply.type) {
             "image" -> "Image"
             "video" -> "Video"
             "voice" -> "Voice message"
-            "file" -> "Attachment"
+            "file" -> "File"
+            "video_note" -> "Video note"
             else -> "Message"
         }
     }
