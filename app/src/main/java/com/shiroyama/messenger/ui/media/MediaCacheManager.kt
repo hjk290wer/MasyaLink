@@ -1,6 +1,7 @@
 package com.shiroyama.messenger.ui.media
 
 import android.content.Context
+import com.shiroyama.messenger.core.storage.StoragePathNormalizer
 import com.shiroyama.messenger.domain.model.Message
 import com.shiroyama.messenger.ui.screens.chat.AttachmentDownload
 import java.io.File
@@ -21,7 +22,8 @@ object MediaCacheManager {
         message: Message,
         loader: suspend (Message) -> AttachmentDownload
     ): MediaLoadState = coroutineScope {
-        val path = message.mediaPath ?: return@coroutineScope MediaLoadState.Error("Attachment path is empty")
+        val path = StoragePathNormalizer.normalizeStoragePath(message.mediaPath)
+            ?: return@coroutineScope MediaLoadState.Error("Media path is invalid")
         memory[path]?.let { return@coroutineScope it }
 
         val fileName = message.mediaOriginalName ?: path.substringAfterLast('/').ifBlank { "media" }
@@ -33,7 +35,8 @@ object MediaCacheManager {
             return@coroutineScope ready
         }
 
-        val newLoad = async(Dispatchers.IO) { loadFromNetwork(context, message, path, fileName, mimeType, file, loader) }
+        val normalizedMessage = message.copy(mediaPath = path)
+        val newLoad = async(Dispatchers.IO) { loadFromNetwork(normalizedMessage, path, fileName, mimeType, file, loader) }
         val existing = inFlight.putIfAbsent(path, newLoad)
         val active = existing ?: newLoad
         try {
@@ -44,12 +47,11 @@ object MediaCacheManager {
     }
 
     fun getCached(message: Message): MediaLoadState.Ready? {
-        val path = message.mediaPath ?: return null
+        val path = StoragePathNormalizer.normalizeStoragePath(message.mediaPath) ?: return null
         return memory[path]
     }
 
     private suspend fun loadFromNetwork(
-        context: Context,
         message: Message,
         path: String,
         fileName: String,
@@ -67,12 +69,7 @@ object MediaCacheManager {
             val attachment = loader(message)
             file.parentFile?.mkdirs()
             file.outputStream().use { it.write(attachment.bytes) }
-            val ready = MediaLoadState.Ready(
-                file = file,
-                fileName = attachment.fileName.ifBlank { fileName },
-                mimeType = attachment.mimeType.ifBlank { mimeType },
-                sizeBytes = attachment.bytes.size.toLong()
-            )
+            val ready = MediaLoadState.Ready(file, attachment.fileName.ifBlank { fileName }, attachment.mimeType.ifBlank { mimeType }, attachment.bytes.size.toLong())
             memory[path] = ready
             ready
         } catch (e: Exception) {
@@ -94,8 +91,8 @@ object MediaCacheManager {
     private fun classifyMediaError(e: Exception): String {
         val text = (e.message ?: e::class.java.simpleName).lowercase()
         return when {
-            text.contains("unknownhost") || text.contains("unable to resolve host") || text.contains("failed to connect") ->
-                "Server address is unavailable. Check VPN/DNS/network."
+            text.contains("media path is invalid") || text.contains("path is invalid") -> "Media path is invalid"
+            text.contains("unknownhost") || text.contains("unable to resolve host") || text.contains("failed to connect") -> "Server address is unavailable. Check VPN/DNS/network."
             text.contains("timeout") -> "Network timeout while loading media."
             text.contains("401") || text.contains("403") -> "Media access denied. Reopen the chat."
             text.contains("404") -> "Media file is no longer available."
